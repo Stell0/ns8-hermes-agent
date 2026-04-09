@@ -27,6 +27,8 @@ IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 AGENT_ENVFILE_PATTERN = re.compile(r"^agent-(-?\d+)\.env$")
 AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent-(-?\d+)_secrets\.env$")
 AGENT_OPENVIKING_CONFIG_PATTERN = re.compile(r"^agent-(-?\d+)_openviking\.conf$")
+HERMES_DATA_VOLUME_PATTERN = re.compile(r"^hermes-agent-hermes-data-(\d+)$")
+LEGACY_OPENVIKING_DATA_VOLUME_PATTERN = re.compile(r"^hermes-agent-openviking-data-(\d+)$")
 SYSTEMD_TARGET_PATTERN = re.compile(r"^hermes-agent@(\d+)\.target$")
 OPENVIKING_CONFIG_PATH = "/app/ov.conf"
 OPENVIKING_WORKSPACE_PATH = "/app/data"
@@ -632,8 +634,24 @@ def scan_generated_agent_ids(base_path="."):
     return ids
 
 
+def list_agent_volume_ids():
+    result = run_command(["podman", "volume", "ls", "--format", "{{.Name}}"], check=False, capture_output=True)
+    if result.returncode != 0 or not result.stdout:
+        return set()
+
+    ids = set()
+    for volume_name in result.stdout.splitlines():
+        for pattern in (HERMES_DATA_VOLUME_PATTERN, LEGACY_OPENVIKING_DATA_VOLUME_PATTERN):
+            match = pattern.fullmatch(volume_name.strip())
+            if match:
+                ids.add(int(match.group(1)))
+                break
+
+    return ids
+
+
 def list_known_agent_ids(base_path="."):
-    return sorted(scan_generated_agent_ids(base_path) | list_systemd_agent_ids())
+    return sorted(scan_generated_agent_ids(base_path) | list_systemd_agent_ids() | list_agent_volume_ids())
 
 
 def write_envfile(path, env_data):

@@ -1,5 +1,8 @@
 {
     "terminal.integrated.env.linux": {
         "NODE_OPTIONS": "--openssl-legacy-provider"
+    },
+    "chat.tools.terminal.autoApprove": {
+        "/home/tux/personalbuild/ns8-hermes-agent/.venv/bin/python": true
     }
 }

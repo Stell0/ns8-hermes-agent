@@ -89,6 +89,46 @@ class ConfigureModuleValidationTest(unittest.TestCase):
 
         persist_agents.assert_not_called()
 
+    def test_list_agent_volume_ids_parses_current_and_legacy_volume_names(self):
+        completed = subprocess_completed_process(
+            0,
+            "\n".join(
+                [
+                    "hermes-agent-hermes-data-1",
+                    "hermes-agent-openviking-data-2",
+                    "hermes-agent-openviking-data",
+                    "unrelated-volume",
+                ]
+            ),
+        )
+
+        with mock.patch.object(self.runtime, "run_command", return_value=completed) as run_command:
+            self.assertEqual(self.runtime.list_agent_volume_ids(), {1, 2})
+
+        run_command.assert_called_once_with(
+            ["podman", "volume", "ls", "--format", "{{.Name}}"],
+            check=False,
+            capture_output=True,
+        )
+
+    def test_list_agent_volume_ids_ignores_podman_failures(self):
+        with mock.patch.object(
+            self.runtime,
+            "run_command",
+            return_value=subprocess_completed_process(125, ""),
+        ):
+            self.assertEqual(self.runtime.list_agent_volume_ids(), set())
+
+    def test_list_known_agent_ids_includes_volume_only_leftovers(self):
+        with mock.patch.object(self.runtime, "scan_generated_agent_ids", return_value={1}), mock.patch.object(
+            self.runtime, "list_systemd_agent_ids", return_value={2}
+        ), mock.patch.object(self.runtime, "list_agent_volume_ids", return_value={3}):
+            self.assertEqual(self.runtime.list_known_agent_ids(), [1, 2, 3])
+
+
+def subprocess_completed_process(returncode, stdout):
+    return types.SimpleNamespace(returncode=returncode, stdout=stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
