@@ -1,4 +1,10 @@
-FROM docker.io/nousresearch/hermes-agent:latest
+FROM docker.io/nousresearch/hermes-agent:v2026.4.8
 LABEL org.opencontainers.image.title="hermes-agent-hermes"
 LABEL org.opencontainers.image.description="Thin wrapper around the upstream Hermes runtime image"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gh \
+    git
+
+RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
 CMD ["gateway", "run"]

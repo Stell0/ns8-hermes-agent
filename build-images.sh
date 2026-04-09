@@ -64,6 +64,7 @@ buildah add "${container}" ui/dist /ui
 # Setup the entrypoint and set a rootless container
 buildah config --entrypoint=/ \
     --label="org.nethserver.rootfull=0" \
+    --label="org.nethserver.tcp-ports-demand=1" \
     --label="org.nethserver.images=${component_images[*]}" \
     "${container}"
 # Commit the image

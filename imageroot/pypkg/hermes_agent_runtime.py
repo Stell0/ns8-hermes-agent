@@ -31,6 +31,7 @@ AGENT_OPENVIKING_CONFIG_PATTERN = re.compile(r"^agent-(-?\d+)_openviking\.conf$"
 SYSTEMD_TARGET_PATTERN = re.compile(r"^hermes-agent@(\d+)\.target$")
 OPENVIKING_CONFIG_PATH = "/app/ov.conf"
 OPENVIKING_WORKSPACE_PATH = "/app/data"
+TCP_PORT_ENV = "TCP_PORT"
 OPENVIKING_PORT_ENV = "OPENVIKING_PORT"
 OPENVIKING_ROOT_API_KEY_ENV = "OPENVIKING_ROOT_API_KEY"
 OPENVIKING_TENANT_MODE_ENV = "OPENVIKING_TENANT_MODE"
@@ -683,9 +684,12 @@ def reserve_tcp_port():
 def ensure_shared_openviking_settings(shared_environment, shared_secrets):
     port_value = shared_environment.get(OPENVIKING_PORT_ENV)
     if not valid_port_value(port_value):
-        port_value = str(reserve_tcp_port())
-        agent.set_env(OPENVIKING_PORT_ENV, port_value)
-        shared_environment[OPENVIKING_PORT_ENV] = port_value
+        port_value = shared_environment.get(TCP_PORT_ENV)
+        if valid_port_value(port_value):
+            agent.set_env(OPENVIKING_PORT_ENV, port_value)
+            shared_environment[OPENVIKING_PORT_ENV] = port_value
+        else:
+            raise ValueError(f"invalid {OPENVIKING_PORT_ENV}: {shared_environment.get(OPENVIKING_PORT_ENV)}")
 
     system_api_port = shared_environment.get(HERMES_SYSTEM_API_PORT_ENV)
     if not valid_port_value(system_api_port):

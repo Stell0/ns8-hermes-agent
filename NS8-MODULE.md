@@ -14,7 +14,7 @@ runtime is kept for the shared OpenViking backend.
 
 The current runtime includes:
 
-- `configure-module`, `get-configuration`, and `destroy-module`
+- `create-module`, `configure-module`, `get-configuration`, and `destroy-module`
 - smarthost discovery and one `smarthost-changed` event handler
 - generated per-agent env and secrets files plus one shared OpenViking config
 - user systemd units for one shared OpenViking service, one reserved Hermes backend service, and one Hermes runtime service per user-facing agent
@@ -48,7 +48,7 @@ numbered executable steps.
 ## Repository Components Relevant To NS8
 
 - `build-images.sh`: builds the module image and two wrapper images
-- `imageroot/actions/`: action implementations for configure, read, and destroy
+- `imageroot/actions/`: action implementations for create, configure, read, and destroy
 - `imageroot/bin/`: runtime helper scripts
 - `imageroot/pypkg/`: shared Python runtime helpers
 - `imageroot/systemd/user/`: templated systemd target and service units
@@ -68,11 +68,13 @@ numbered executable steps.
 The module image currently sets these relevant NS8 labels:
 
 - `org.nethserver.rootfull=0`
+- `org.nethserver.tcp-ports-demand=1`
 - `org.nethserver.images=<wrapper image list>`
 
 The practical effect is:
 
 - the module runs rootless
+- the core allocates one TCP port and exposes it as `TCP_PORT`
 - the core pulls the additional wrapper images on install and update
 - the pulled image URLs are exposed as environment variables such as
   `HERMES_AGENT_HERMES_IMAGE` and `HERMES_AGENT_OPENVIKING_IMAGE`
@@ -81,16 +83,17 @@ The current image does not declare `org.nethserver.volumes`, so the per-agent
 named volumes created by the runtime stay internal to the module and are not
 currently surfaced for NS8 additional-disk assignment.
 
-The current image does not request a TCP port and does not request Traefik route
-authorizations.
+The current image requests one TCP port for the shared OpenViking localhost
+publish mapping and does not request Traefik route authorizations.
 
 ## Lifecycle Summary
 
 ```text
 add-module
-  -> create-module (core only)
+  -> create-module
        - pulls the module image and the wrapper images
        - installs imageroot and UI assets
+    - persists NS8 `TCP_PORT` into `OPENVIKING_PORT`
   -> configure-module
        - validates and persists the agent roster in environment
        - discovers smarthost settings
@@ -107,6 +110,17 @@ add-module
 ```
 
 ## Actions
+
+### `create-module`
+
+**Path**: `imageroot/actions/create-module/`
+
+| Step | File | Purpose |
+|------|------|---------|
+| 20 | `20create` | Validates the NS8-provided `TCP_PORT` and persists it as `OPENVIKING_PORT` in `environment` for the shared OpenViking service. |
+
+If an existing instance already has `TCP_PORT` but lacks `OPENVIKING_PORT`,
+runtime reconciliation backfills the alias once before starting services.
 
 ### `configure-module`
 
@@ -239,7 +253,6 @@ without exposing it for normal management.
 
 The current repository does not customize:
 
-- `create-module`
 - `get-status`
 - `update-module`
 
@@ -253,7 +266,7 @@ path from the older split Hermes plus gateway runtime is implemented here.
 The module runtime uses these state files:
 
 - `environment`: shared NS8 state; stores `AGENTS_LIST` and public smarthost
-  settings plus the internal shared OpenViking port and reserved Hermes API publish port
+  settings plus the NS8-allocated `OPENVIKING_PORT` alias and reserved Hermes API publish port
 - `secrets.env`: shared sensitive values such as `SMTP_PASSWORD`, the shared `OPENVIKING_ROOT_API_KEY`, and the shared OpenViking embedding API key
 - `systemd.env`: generated controlled subset of environment values used only by
   systemd units
@@ -290,7 +303,7 @@ This helper:
 This helper:
 
 - reads the stored agent roster
-- writes `systemd.env` from controlled image variables plus the internal OpenViking port and reserved Hermes API publish port
+- writes `systemd.env` from controlled image variables plus the create-module-persisted OpenViking port and reserved Hermes API publish port
 - writes `agent-<id>.env`, `agent-<id>_secrets.env`, and `openviking.conf`
 - runs `hermes config set ...` inside each opted-in agent volume so Hermes-native
   `config.yaml` and `.env` stay aligned with the hidden shared gateway endpoint

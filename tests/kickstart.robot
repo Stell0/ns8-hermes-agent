@@ -30,6 +30,7 @@ Check if hermes-agent creates shared and per-running-agent runtime files
     ${agent2_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent-2.env' -print -quit
     ${agent2_secrets} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent-2_secrets.env' -print -quit
     ${agent2_openviking} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent-2_openviking.conf' -print -quit
+    ${tcp_port} =    Execute Command    grep '^TCP_PORT=' ${environment_file} | cut -d= -f2-
     ${openviking_port} =    Execute Command    grep '^OPENVIKING_PORT=' ${environment_file} | cut -d= -f2-
     ${system_api_port} =    Execute Command    grep '^HERMES_SYSTEM_API_PORT=' ${environment_file} | cut -d= -f2-
     ${root_openviking_key} =    Execute Command    grep '^OPENVIKING_ROOT_API_KEY=' ${shared_secrets} | cut -d= -f2-
@@ -54,7 +55,9 @@ Check if hermes-agent creates shared and per-running-agent runtime files
     Should Be Empty    ${agent2_env}
     Should Be Empty    ${agent2_secrets}
     Should Be Empty    ${agent2_openviking}
+    Should Not Be Empty    ${tcp_port}
     Should Not Be Empty    ${openviking_port}
+    Should Be Equal    ${openviking_port}    ${tcp_port}
     Should Not Be Empty    ${system_api_port}
     Should Not Be Empty    ${root_openviking_key}
     Should Be Equal    ${embedding_key}    test-embedding-key

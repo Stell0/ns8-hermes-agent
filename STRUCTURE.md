@@ -11,7 +11,7 @@ Hermes manager components that are not yet present in the tree.
 - `OPENVIKING_RESOURCE_MAP.md`: OpenViking documentation index for tenant, server, and deployment behavior.
 - `README.md`: current project status and usage notes.
 - `STRUCTURE.md`: this file.
-- `build-images.sh`: builds the module image and the two wrapper images.
+- `build-images.sh`: builds the module image and the two wrapper images, and requests one NS8-managed TCP port for the module image.
 - `test-module.sh`: runs the Robot Framework module test.
 - `renovate.json`: Renovate configuration.
 
@@ -33,6 +33,7 @@ Hermes manager components that are not yet present in the tree.
 
 ### `imageroot/actions/`
 
+- `create-module/20create`: validates the NS8-provided `TCP_PORT` and persists it to `OPENVIKING_PORT` in `environment` for the shared OpenViking service.
 - `configure-module/20configure`: validates the user-facing `agents` payload plus shared `openviking` settings, persists `AGENTS_LIST`, and stores the shared embedding provider and secret.
 - `configure-module/80start_services`: shell wrapper that delegates per-agent runtime reconciliation to `start-agent-services`.
 - `configure-module/validate-input.json`: input schema for `configure-module`, including agent validation and the per-agent `use_default_gateway_for_llm` flag.

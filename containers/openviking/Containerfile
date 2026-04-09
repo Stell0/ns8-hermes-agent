@@ -1,4 +1,4 @@
-FROM ghcr.io/volcengine/openviking:latest
+FROM ghcr.io/volcengine/openviking:v0.3.4
 LABEL org.opencontainers.image.title="hermes-agent-openviking"
 LABEL org.opencontainers.image.description="Thin wrapper around the upstream OpenViking runtime image"
 ENV OPENVIKING_WITH_BOT=0
