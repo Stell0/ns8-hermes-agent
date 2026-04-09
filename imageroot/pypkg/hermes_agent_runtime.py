@@ -20,6 +20,7 @@ SYSTEMD_ENVFILE = "systemd.env"
 LEGACY_AGENTS_ENVFILE = "agents.env"
 LEGACY_SMARTHOST_ENVFILE = "smarthost.env"
 SHARED_OPENVIKING_CONFIGFILE = "openviking.conf"
+HERMES_IMAGE_ENV = "HERMES_AGENT_HERMES_IMAGE"
 ALLOWED_ROLES = {"default", "developer"}
 ALLOWED_STATUSES = {"start", "stop"}
 NAME_PATTERN = re.compile(r"^[A-Za-z ]+$")
@@ -59,6 +60,10 @@ HERMES_SYSTEM_API_PORT_ENV = "HERMES_SYSTEM_API_PORT"
 HERMES_API_SERVER_HOST = "0.0.0.0"
 HERMES_API_SERVER_PORT = 8642
 HERMES_API_MODEL_NAME = "hermes-agent"
+HERMES_MODEL_PROVIDER_KEY = "model.provider"
+HERMES_MODEL_DEFAULT_KEY = "model.default"
+HERMES_MODEL_BASE_URL_KEY = "model.base_url"
+HERMES_OPENAI_API_KEY = "OPENAI_API_KEY"
 SUPPORTED_EMBEDDING_PROVIDERS = {
     "gemini",
     "jina",
@@ -125,6 +130,7 @@ def system_agent_data():
         "account": SYSTEM_AGENT_ACCOUNT,
         "user": SYSTEM_AGENT_USER,
         "agent_id": SYSTEM_AGENT_OPENVIKING_AGENT_ID,
+        "use_default_gateway_for_llm": False,
         "hidden": True,
         "protected": True,
         "system": True,
@@ -349,6 +355,10 @@ def validate_agents(raw_agents):
         if status not in ALLOWED_STATUSES:
             raise ValueError(f"agent at index {index} has an invalid status")
 
+        use_default_gateway_for_llm = raw_agent.get("use_default_gateway_for_llm", False)
+        if not isinstance(use_default_gateway_for_llm, bool):
+            raise ValueError(f"agent at index {index} has an invalid use_default_gateway_for_llm flag")
+
         account = normalize_identifier(
             raw_agent.get("account"),
             default_openviking_account(agent_id),
@@ -388,6 +398,7 @@ def validate_agents(raw_agents):
                 "account": account,
                 "user": user,
                 "agent_id": openviking_agent_id,
+                "use_default_gateway_for_llm": use_default_gateway_for_llm,
             }
         )
         seen_ids.add(agent_id)
@@ -409,6 +420,7 @@ def serialize_agents(agents):
                 agent_data["account"],
                 agent_data["user"],
                 agent_data["agent_id"],
+                "true" if agent_data.get("use_default_gateway_for_llm") else "false",
             ]
         )
         for agent_data in sorted(agents, key=lambda item: item["id"])
@@ -427,13 +439,20 @@ def parse_agents_list(raw_agents_list):
         if not serialized_agent:
             continue
 
-        parts = serialized_agent.split(":", 6)
+        parts = serialized_agent.split(":")
         if len(parts) in {3, 4}:
             return []
-        if len(parts) != 7:
+        if len(parts) not in {7, 8}:
             raise ValueError(f"invalid AGENTS_LIST entry: {serialized_agent}")
 
-        agent_id, name, role, status, account, user, openviking_agent_id = parts
+        use_default_gateway_for_llm = False
+        if len(parts) == 7:
+            agent_id, name, role, status, account, user, openviking_agent_id = parts
+        else:
+            agent_id, name, role, status, account, user, openviking_agent_id, raw_gateway_flag = parts
+            if raw_gateway_flag not in {"true", "false"}:
+                raise ValueError(f"invalid AGENTS_LIST use_default_gateway_for_llm: {raw_gateway_flag}")
+            use_default_gateway_for_llm = raw_gateway_flag == "true"
 
         normalized_name = name.strip()
 
@@ -467,6 +486,7 @@ def parse_agents_list(raw_agents_list):
                 "account": account,
                 "user": user,
                 "agent_id": openviking_agent_id,
+                "use_default_gateway_for_llm": use_default_gateway_for_llm,
             }
         )
         seen_ids.add(normalized_id)
@@ -708,6 +728,52 @@ def hermes_system_api_port(shared_environment):
 
 def hermes_system_api_base(shared_environment):
     return f"http://{OPENVIKING_CONTAINER_HOST}:{hermes_system_api_port(shared_environment)}/v1"
+
+
+def hermes_runtime_image(shared_environment):
+    image = shared_environment.get(HERMES_IMAGE_ENV)
+    if not image:
+        raise ValueError(f"missing {HERMES_IMAGE_ENV}")
+
+    return image
+
+
+def podman_run_hermes_config(agent_id, shared_environment, key, value):
+    run_command(
+        [
+            "podman",
+            "run",
+            "--rm",
+            "--volume",
+            f"{hermes_data_volume(agent_id)}:/opt/data:z",
+            "--env",
+            "HERMES_HOME=/opt/data",
+            hermes_runtime_image(shared_environment),
+            "config",
+            "set",
+            key,
+            value,
+        ]
+    )
+
+
+def sync_agent_llm_gateway_config(agent_data, shared_environment, system_agent_secrets):
+    gateway_enabled = agent_data.get("use_default_gateway_for_llm", False)
+    config_values = [
+        (HERMES_MODEL_PROVIDER_KEY, "custom" if gateway_enabled else "auto"),
+        (HERMES_MODEL_DEFAULT_KEY, HERMES_API_MODEL_NAME if gateway_enabled else ""),
+        (HERMES_MODEL_BASE_URL_KEY, hermes_system_api_base(shared_environment) if gateway_enabled else ""),
+        (
+            HERMES_OPENAI_API_KEY,
+            system_agent_secrets.get(HERMES_API_SERVER_KEY_ENV, "") if gateway_enabled else "",
+        ),
+    ]
+
+    if gateway_enabled and not config_values[-1][1]:
+        raise ValueError("missing system gateway API key")
+
+    for key, value in config_values:
+        podman_run_hermes_config(agent_data["id"], shared_environment, key, value)
 
 
 def build_agent_public_env(agent_data, shared_environment):
@@ -1119,6 +1185,13 @@ def sync_agent_runtime_files(agent_id=None):
     system_agent_secrets = generated_agent_secrets.get(SYSTEM_AGENT_ID) or read_optional_envfile(
         agent_secrets_envfile(SYSTEM_AGENT_ID)
     )
+
+    for agent_data in agents:
+        if is_system_agent_id(agent_data["id"]):
+            continue
+
+        sync_agent_llm_gateway_config(agent_data, shared_environment, system_agent_secrets)
+
     write_jsonfile(
         shared_openviking_configfile(),
         build_openviking_config(shared_environment, shared_secrets, system_agent_secrets),

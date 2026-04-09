@@ -144,6 +144,12 @@
                       >
                         <cv-structured-list-data class="break-word">
                           {{ agentData.name }}
+                          <p
+                            v-if="agentData.use_default_gateway_for_llm"
+                            class="gateway-flag"
+                          >
+                            {{ $t("settings.use_default_gateway_for_llm") }}
+                          </p>
                         </cv-structured-list-data>
                         <cv-structured-list-data>
                           {{ roleLabel(agentData.role) }}
@@ -163,6 +169,14 @@
                             flip-menu
                             class="table-overflow-menu"
                           >
+                            <cv-overflow-menu-item
+                              @click="showEditAgentModal(agentData)"
+                            >
+                              <NsMenuItem
+                                :icon="Edit20"
+                                :label="$t('settings.edit_agent')"
+                              />
+                            </cv-overflow-menu-item>
                             <cv-overflow-menu-item
                               :disabled="agentData.status === 'start'"
                               @click="setAgentStatus(agentData.id, 'start')"
@@ -265,6 +279,20 @@
               {{ $t("settings.role_developer") }}
             </cv-select-option>
           </cv-select>
+          <div class="gateway-checkbox mg-bottom-lg">
+            <label>
+              <input
+                v-model="createAgentForm.use_default_gateway_for_llm"
+                type="checkbox"
+                class="gateway-checkbox-input"
+                :disabled="loading.configureModule"
+              />
+              {{ $t("settings.use_default_gateway_for_llm") }}
+            </label>
+            <p class="field-helper">
+              {{ $t("settings.use_default_gateway_for_llm_help") }}
+            </p>
+          </div>
           <NsInlineNotification
             v-if="showCreateAgentError"
             kind="error"
@@ -279,6 +307,72 @@
       }}</template>
       <template slot="primary-button">{{
         $t("settings.create_agent")
+      }}</template>
+    </NsModal>
+
+    <NsModal
+      size="default"
+      :visible="isShownEditAgentModal"
+      :primary-button-disabled="loading.configureModule"
+      :isLoading="loading.configureModule && configureMode === 'edit'"
+      @modal-hidden="hideEditAgentModal"
+      @primary-click="updateAgent"
+    >
+      <template slot="title">{{ $t("settings.edit_agent_title") }}</template>
+      <template slot="content">
+        <cv-form @submit.prevent="updateAgent">
+          <NsTextInput
+            v-model.trim="editAgentForm.name"
+            :label="$t('settings.agent_name')"
+            :placeholder="$t('settings.agent_name_placeholder')"
+            :invalid-message="error.editAgentName"
+            :disabled="loading.configureModule"
+            data-modal-primary-focus
+            ref="editAgentName"
+          />
+          <cv-select
+            v-model="editAgentForm.role"
+            :label="$t('settings.role')"
+            :invalid-message="error.editAgentRole"
+            :disabled="loading.configureModule"
+            ref="editAgentRole"
+            class="mg-bottom-lg"
+          >
+            <cv-select-option value="default">
+              {{ $t("settings.role_default") }}
+            </cv-select-option>
+            <cv-select-option value="developer">
+              {{ $t("settings.role_developer") }}
+            </cv-select-option>
+          </cv-select>
+          <div class="gateway-checkbox mg-bottom-lg">
+            <label>
+              <input
+                v-model="editAgentForm.use_default_gateway_for_llm"
+                type="checkbox"
+                class="gateway-checkbox-input"
+                :disabled="loading.configureModule"
+              />
+              {{ $t("settings.use_default_gateway_for_llm") }}
+            </label>
+            <p class="field-helper">
+              {{ $t("settings.use_default_gateway_for_llm_help") }}
+            </p>
+          </div>
+          <NsInlineNotification
+            v-if="showEditAgentError"
+            kind="error"
+            :title="$t('action.configure-module')"
+            :description="error.configureModule"
+            :showCloseButton="false"
+          />
+        </cv-form>
+      </template>
+      <template slot="secondary-button">{{
+        core.$t("common.cancel")
+      }}</template>
+      <template slot="primary-button">{{
+        $t("settings.save")
       }}</template>
     </NsModal>
 
@@ -360,11 +454,19 @@ export default {
       submittedAgents: [],
       configureMode: "",
       isShownCreateAgentModal: false,
+      isShownEditAgentModal: false,
       isShownDeleteAgentModal: false,
+      agentToEdit: null,
       agentToDelete: null,
       createAgentForm: {
         name: "",
         role: "default",
+        use_default_gateway_for_llm: false,
+      },
+      editAgentForm: {
+        name: "",
+        role: "default",
+        use_default_gateway_for_llm: false,
       },
       loading: {
         getConfiguration: false,
@@ -375,6 +477,8 @@ export default {
         configureModule: "",
         createAgentName: "",
         createAgentRole: "",
+        editAgentName: "",
+        editAgentRole: "",
         embeddingProvider: "",
         embeddingApiKey: "",
       },
@@ -413,6 +517,9 @@ export default {
     },
     showCreateAgentError() {
       return this.configureMode === "create" && !!this.error.configureModule;
+    },
+    showEditAgentError() {
+      return this.configureMode === "edit" && !!this.error.configureModule;
     },
     showDeleteAgentError() {
       return this.configureMode === "delete" && !!this.error.configureModule;
@@ -489,34 +596,35 @@ export default {
       if (this.configureMode === "create") {
         this.clearCreateAgentErrors();
       }
+      if (this.configureMode === "edit") {
+        this.clearEditAgentErrors();
+      }
       this.clearOpenVikingErrors();
 
       for (const validationError of validationErrors) {
         const field = validationError.field || validationError.parameter || "";
 
-        if (
-          this.configureMode === "create" &&
-          field !== "(root)" &&
-          field !== ""
-        ) {
+        if (["create", "edit"].includes(this.configureMode) && field !== "(root)" && field !== "") {
+          const nameErrorField = this.configureMode === "create" ? "createAgentName" : "editAgentName";
+          const roleErrorField = this.configureMode === "create" ? "createAgentRole" : "editAgentRole";
+
           if (field.endsWith("name")) {
-            this.error.createAgentName = this.$t("settings.agent_name_invalid");
+            this.error[nameErrorField] = this.$t("settings.agent_name_invalid");
 
             if (!focusAlreadySet) {
-              this.focusElement("createAgentName");
+              this.focusElement(nameErrorField);
               focusAlreadySet = true;
             }
           }
 
           if (field.endsWith("role")) {
-            this.error.createAgentRole = this.$t("settings.agent_role_invalid");
+            this.error[roleErrorField] = this.$t("settings.agent_role_invalid");
 
             if (!focusAlreadySet) {
-              this.focusElement("createAgentRole");
+              this.focusElement(roleErrorField);
               focusAlreadySet = true;
             }
           }
-
         }
 
         if (field.includes("provider")) {
@@ -600,6 +708,7 @@ export default {
             name: (agentData.name || "").trim(),
             role: agentData.role,
             status: agentData.status === "stop" ? "stop" : "start",
+            use_default_gateway_for_llm: !!agentData.use_default_gateway_for_llm,
             hidden: !!agentData.hidden,
             protected: !!agentData.protected,
             system: !!agentData.system,
@@ -699,6 +808,7 @@ export default {
           name: agentData.name,
           role: agentData.role,
           status: agentData.status,
+          use_default_gateway_for_llm: !!agentData.use_default_gateway_for_llm,
         };
 
         for (const field of ["account", "user", "agent_id"]) {
@@ -730,12 +840,25 @@ export default {
       this.error.createAgentName = "";
       this.error.createAgentRole = "";
     },
+    clearEditAgentErrors() {
+      this.error.editAgentName = "";
+      this.error.editAgentRole = "";
+    },
     resetCreateAgentForm() {
       this.createAgentForm = {
         name: "",
         role: "default",
+        use_default_gateway_for_llm: false,
       };
       this.clearCreateAgentErrors();
+    },
+    resetEditAgentForm() {
+      this.editAgentForm = {
+        name: "",
+        role: "default",
+        use_default_gateway_for_llm: false,
+      };
+      this.clearEditAgentErrors();
     },
     showCreateAgentModal() {
       this.resetCreateAgentForm();
@@ -756,6 +879,36 @@ export default {
       this.resetCreateAgentForm();
 
       if (this.configureMode === "create") {
+        this.configureMode = "";
+        this.error.configureModule = "";
+      }
+    },
+    showEditAgentModal(agentData) {
+      this.agentToEdit = agentData;
+      this.editAgentForm = {
+        name: agentData.name,
+        role: agentData.role,
+        use_default_gateway_for_llm: !!agentData.use_default_gateway_for_llm,
+      };
+      this.clearEditAgentErrors();
+      this.error.configureModule = "";
+      this.configureMode = "";
+      this.isShownEditAgentModal = true;
+
+      this.$nextTick(() => {
+        this.focusElement("editAgentName");
+      });
+    },
+    hideEditAgentModal() {
+      if (this.loading.configureModule && this.configureMode === "edit") {
+        return;
+      }
+
+      this.isShownEditAgentModal = false;
+      this.agentToEdit = null;
+      this.resetEditAgentForm();
+
+      if (this.configureMode === "edit") {
         this.configureMode = "";
         this.error.configureModule = "";
       }
@@ -788,6 +941,34 @@ export default {
 
       return isValidationOk;
     },
+    validateEditAgent() {
+      this.clearEditAgentErrors();
+      this.error.configureModule = "";
+
+      let isValidationOk = true;
+      const trimmedName = this.editAgentForm.name.trim();
+
+      if (!trimmedName) {
+        this.error.editAgentName = this.$t("common.required");
+        this.focusElement("editAgentName");
+        isValidationOk = false;
+      } else if (!/^[A-Za-z ]+$/.test(trimmedName)) {
+        this.error.editAgentName = this.$t("settings.agent_name_invalid");
+        this.focusElement("editAgentName");
+        isValidationOk = false;
+      }
+
+      if (!this.roles.includes(this.editAgentForm.role)) {
+        this.error.editAgentRole = this.$t("settings.agent_role_invalid");
+
+        if (isValidationOk) {
+          this.focusElement("editAgentRole");
+          isValidationOk = false;
+        }
+      }
+
+      return isValidationOk;
+    },
     createAgent() {
       if (!this.validateCreateAgent()) {
         return;
@@ -800,10 +981,31 @@ export default {
           name: this.createAgentForm.name.trim(),
           role: this.createAgentForm.role,
           status: "start",
+          use_default_gateway_for_llm: this.createAgentForm.use_default_gateway_for_llm,
         },
       ];
 
       this.saveAgents(nextAgents, "create");
+    },
+    updateAgent() {
+      if (!this.agentToEdit || !this.validateEditAgent()) {
+        return;
+      }
+
+      const nextAgents = this.visibleAgents.map((agentData) => {
+        if (agentData.id !== this.agentToEdit.id) {
+          return agentData;
+        }
+
+        return {
+          ...agentData,
+          name: this.editAgentForm.name.trim(),
+          role: this.editAgentForm.role,
+          use_default_gateway_for_llm: this.editAgentForm.use_default_gateway_for_llm,
+        };
+      });
+
+      this.saveAgents(nextAgents, "edit");
     },
     showDeleteAgentModal(agentData) {
       this.agentToDelete = agentData;
@@ -873,6 +1075,14 @@ export default {
         return;
       }
 
+      if (mode === "edit") {
+        this.isShownEditAgentModal = false;
+        this.agentToEdit = null;
+        this.resetEditAgentForm();
+        this.getConfiguration();
+        return;
+      }
+
       if (mode === "delete") {
         this.isShownDeleteAgentModal = false;
         this.agentToDelete = null;
@@ -932,6 +1142,21 @@ export default {
 .field-helper {
   margin-top: $spacing-03;
   color: $text-secondary;
+}
+
+.gateway-flag {
+  margin: $spacing-02 0 0;
+  color: $text-secondary;
+  font-size: 0.875rem;
+}
+
+.gateway-checkbox {
+  display: flex;
+  flex-direction: column;
+}
+
+.gateway-checkbox-input {
+  margin-right: $spacing-03;
 }
 
 @media (max-width: 671px) {

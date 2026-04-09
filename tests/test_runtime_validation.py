@@ -89,6 +89,119 @@ class ConfigureModuleValidationTest(unittest.TestCase):
 
         persist_agents.assert_not_called()
 
+    def test_validate_agents_accepts_gateway_flag(self):
+        agents = self.runtime.validate_agents(
+            [
+                {
+                    "id": 1,
+                    "name": "Valid Name",
+                    "role": "default",
+                    "status": "start",
+                    "use_default_gateway_for_llm": True,
+                }
+            ]
+        )
+
+        self.assertTrue(agents[0]["use_default_gateway_for_llm"])
+
+    def test_validate_agents_rejects_non_boolean_gateway_flag(self):
+        with self.assertRaisesRegex(ValueError, re.escape("agent at index 0 has an invalid use_default_gateway_for_llm flag")):
+            self.runtime.validate_agents(
+                [
+                    {
+                        "id": 1,
+                        "name": "Valid Name",
+                        "role": "default",
+                        "status": "start",
+                        "use_default_gateway_for_llm": "yes",
+                    }
+                ]
+            )
+
+    def test_parse_agents_list_keeps_backward_compatibility(self):
+        agents = self.runtime.parse_agents_list("1:Valid Name:default:start:agent-1:agent-1:agent-1")
+
+        self.assertEqual(len(agents), 1)
+        self.assertFalse(agents[0]["use_default_gateway_for_llm"])
+
+    def test_serialize_agents_round_trips_gateway_flag(self):
+        raw_agents = [
+            {
+                "id": 1,
+                "name": "Valid Name",
+                "role": "default",
+                "status": "start",
+                "account": "agent-1",
+                "user": "agent-1",
+                "agent_id": "agent-1",
+                "use_default_gateway_for_llm": True,
+            }
+        ]
+
+        serialized = self.runtime.serialize_agents(raw_agents)
+        parsed = self.runtime.parse_agents_list(serialized)
+
+        self.assertTrue(parsed[0]["use_default_gateway_for_llm"])
+
+    def test_sync_agent_llm_gateway_config_uses_hermes_config_set(self):
+        agent_data = {
+            "id": 1,
+            "use_default_gateway_for_llm": True,
+        }
+        shared_environment = {
+            self.runtime.HERMES_SYSTEM_API_PORT_ENV: str(self.runtime.HERMES_API_SERVER_PORT),
+            self.runtime.HERMES_IMAGE_ENV: "example/hermes:latest",
+        }
+        system_agent_secrets = {
+            self.runtime.HERMES_API_SERVER_KEY_ENV: "test-key",
+        }
+
+        with mock.patch.object(self.runtime, "run_command") as run_command:
+            self.runtime.sync_agent_llm_gateway_config(agent_data, shared_environment, system_agent_secrets)
+
+        commands = [call.args[0] for call in run_command.call_args_list]
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(commands[0][-4:], ["config", "set", "model.provider", "custom"])
+        self.assertEqual(commands[1][-4:], ["config", "set", "model.default", self.runtime.HERMES_API_MODEL_NAME])
+        self.assertEqual(
+            commands[2][-4:],
+            ["config", "set", "model.base_url", f"http://{self.runtime.OPENVIKING_CONTAINER_HOST}:{self.runtime.HERMES_API_SERVER_PORT}/v1"],
+        )
+        self.assertEqual(commands[3][-4:], ["config", "set", "OPENAI_API_KEY", "test-key"])
+
+    def test_sync_agent_llm_gateway_config_clears_gateway_settings_when_disabled(self):
+        agent_data = {
+            "id": 1,
+            "use_default_gateway_for_llm": False,
+        }
+        shared_environment = {
+            self.runtime.HERMES_SYSTEM_API_PORT_ENV: str(self.runtime.HERMES_API_SERVER_PORT),
+            self.runtime.HERMES_IMAGE_ENV: "example/hermes:latest",
+        }
+
+        with mock.patch.object(self.runtime, "run_command") as run_command:
+            self.runtime.sync_agent_llm_gateway_config(agent_data, shared_environment, {})
+
+        commands = [call.args[0] for call in run_command.call_args_list]
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(commands[0][-4:], ["config", "set", "model.provider", "auto"])
+        self.assertEqual(commands[1][-4:], ["config", "set", "model.default", ""])
+        self.assertEqual(commands[2][-4:], ["config", "set", "model.base_url", ""])
+        self.assertEqual(commands[3][-4:], ["config", "set", "OPENAI_API_KEY", ""])
+
+    def test_sync_agent_llm_gateway_config_requires_system_gateway_key_when_enabled(self):
+        agent_data = {
+            "id": 1,
+            "use_default_gateway_for_llm": True,
+        }
+        shared_environment = {
+            self.runtime.HERMES_SYSTEM_API_PORT_ENV: str(self.runtime.HERMES_API_SERVER_PORT),
+            self.runtime.HERMES_IMAGE_ENV: "example/hermes:latest",
+        }
+
+        with self.assertRaisesRegex(ValueError, re.escape("missing system gateway API key")):
+            self.runtime.sync_agent_llm_gateway_config(agent_data, shared_environment, {})
+
 
 if __name__ == "__main__":
     unittest.main()

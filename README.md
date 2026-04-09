@@ -96,23 +96,27 @@ Each user-facing agent contains:
 - `role`: one of `default` or `developer`
 - `status`: one of `start` or `stop`; it is persisted and used to decide whether
     the per-agent systemd target should be running
+- `use_default_gateway_for_llm`: boolean; when `true`, the agent runtime is
+    configured to use the module's hidden shared Hermes API gateway as its main
+    LLM endpoint
 - hidden backend-only fields `account`, `user`, and `agent_id`: these are
     auto-generated today, persisted with the roster, and used to provision the
     agent inside the shared OpenViking server
 
 The persisted runtime value is stored in `environment` as:
 
-    AGENTS_LIST=1:Foo Bar:developer:start:agent-1:agent-1:agent-1,2:Alice User:default:stop:agent-2:agent-2:agent-2
+    AGENTS_LIST=1:Foo Bar:developer:start:agent-1:agent-1:agent-1:true,2:Alice User:default:stop:agent-2:agent-2:agent-2:false
 
 Example:
 
-    api-cli run module/hermes-agent1/configure-module --data '{"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}],"openviking":{"embedding":{"provider":"jina","api_key":"test-key"}}}'
+    api-cli run module/hermes-agent1/configure-module --data '{"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start","use_default_gateway_for_llm":true}],"openviking":{"embedding":{"provider":"jina","api_key":"test-key"}}}'
 
 The above command will:
 - validate and store the agent roster in `environment`
 - persist the shared OpenViking embedding provider in `environment` and its API key in `secrets.env`
 - synchronize `systemd.env`, one shared `openviking.conf`, and per-agent `agent-<id>.env` and `agent-<id>_secrets.env` runtime files
 - synchronize the reserved system Hermes runtime files `agent-0.env` and `agent-0_secrets.env`
+- prefer `hermes config set ...` inside each agent volume for Hermes-native model settings so opted-in agents keep `config.yaml` and `.env` aligned with the hidden shared gateway endpoint and key
 - remove per-agent runtime files for stopped or deleted agents
 - generate and preserve one shared `OPENVIKING_ROOT_API_KEY` in `secrets.env`
 - generate and preserve one reserved Hermes API server key for the hidden system backend in `agent-0_secrets.env`
@@ -140,7 +144,7 @@ Read the current configuration with:
 
 Example output:
 
-    {"agents": [{"id": 0, "name": "OpenViking Backend", "role": "default", "status": "start", "account": "system", "user": "system", "agent_id": "openviking-backend", "hidden": true, "protected": true, "system": true}, {"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "account": "agent-1", "user": "agent-1", "agent_id": "agent-1", "hidden": false, "protected": false, "system": false}], "openviking": {"embedding": {"provider": "jina", "api_key_configured": true}}}
+    {"agents": [{"id": 0, "name": "OpenViking Backend", "role": "default", "status": "start", "account": "system", "user": "system", "agent_id": "openviking-backend", "use_default_gateway_for_llm": false, "hidden": true, "protected": true, "system": true}, {"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "account": "agent-1", "user": "agent-1", "agent_id": "agent-1", "use_default_gateway_for_llm": true, "hidden": false, "protected": false, "system": false}], "openviking": {"embedding": {"provider": "jina", "api_key_configured": true}}}
 
 `status` is returned from the actual systemd-backed runtime state, not only from
 the desired configuration.
@@ -162,9 +166,17 @@ The persistent storage contract is currently:
 - `hermes-agent-hermes-system.service` mounts `hermes-agent-hermes-data-0` at `/opt/data` and publishes the Hermes API server only on module-local loopback for OpenViking
 
 The Hermes wrapper keeps the upstream Hermes Docker entrypoint and now defaults
-directly to `gateway run`, so first start still bootstraps `/opt/data` with
-default `.env`, `config.yaml`, `SOUL.md`, and bundled skills without splitting
-the Hermes home across two containers.
+directly to `gateway run`. Upstream Hermes still owns first-start bootstrap for
+`/opt/data`, while the module may pre-seed `.env` and `config.yaml` with
+`hermes config set` before service startup for agents that opt into the shared
+LLM gateway. This keeps the Hermes home in one volume without splitting runtime
+state across two containers.
+
+When `use_default_gateway_for_llm` is enabled for a user-facing agent, the
+module keeps using the hidden reserved backend as the only shared gateway
+server. The opted-in agent is configured as a client of that internal endpoint;
+it does not become a gateway server itself and it does not change the meaning of
+the visible `default` role.
 
 ## Smarthost setting discovery
 

@@ -121,7 +121,8 @@ Accepted payload shape:
       "id": 1,
       "name": "Foo Bar",
       "role": "developer",
-      "status": "start"
+      "status": "start",
+      "use_default_gateway_for_llm": true
     }
   ],
   "openviking": {
@@ -139,6 +140,8 @@ Each agent must contain:
 - `name`: non-empty string matching `^[A-Za-z ]+$`
 - `role`: `default` or `developer`
 - `status`: `start` or `stop`
+- `use_default_gateway_for_llm`: boolean; when `true`, the agent is configured
+  to use the module's hidden shared Hermes API gateway as its main LLM endpoint
 - optional hidden backend fields `account`, `user`, and `agent_id`: auto-generated today and persisted so future UI work can expose them explicitly
 
 Steps:
@@ -151,7 +154,7 @@ Steps:
 The persisted roster format is:
 
 ```text
-AGENTS_LIST=1:Foo Bar:developer:start:agent-1:agent-1:agent-1,2:Alice User:default:stop:agent-2:agent-2:agent-2
+AGENTS_LIST=1:Foo Bar:developer:start:agent-1:agent-1:agent-1:true,2:Alice User:default:stop:agent-2:agent-2:agent-2:false
 ```
 
 The stored `status` is the desired state. The runtime status returned later by
@@ -178,6 +181,7 @@ Example output:
       "account": "system",
       "user": "system",
       "agent_id": "openviking-backend",
+      "use_default_gateway_for_llm": false,
       "hidden": true,
       "protected": true,
       "system": true
@@ -190,6 +194,7 @@ Example output:
       "account": "agent-1",
       "user": "agent-1",
       "agent_id": "agent-1",
+      "use_default_gateway_for_llm": true,
       "hidden": false,
       "protected": false,
       "system": false
@@ -202,6 +207,7 @@ Example output:
       "account": "agent-2",
       "user": "agent-2",
       "agent_id": "agent-2",
+      "use_default_gateway_for_llm": false,
       "hidden": false,
       "protected": false,
       "system": false
@@ -286,6 +292,9 @@ This helper:
 - reads the stored agent roster
 - writes `systemd.env` from controlled image variables plus the internal OpenViking port and reserved Hermes API publish port
 - writes `agent-<id>.env`, `agent-<id>_secrets.env`, and `openviking.conf`
+- runs `hermes config set ...` inside each opted-in agent volume so Hermes-native
+  `config.yaml` and `.env` stay aligned with the hidden shared gateway endpoint
+  and key when `use_default_gateway_for_llm` is enabled
 - generates and preserves one shared `OPENVIKING_ROOT_API_KEY`
 - generates and preserves the reserved Hermes API server key used by shared OpenViking
 - removes stale per-agent runtime files for deleted agents
@@ -333,6 +342,7 @@ This module centralizes:
 - hidden reserved system-agent synthesis and metadata
 - shared OpenViking embedding settings validation and persistence
 - runtime-file generation
+- Hermes-native per-agent gateway client configuration through `hermes config set`
 - shared OpenViking config and tenant provisioning
 - per-agent named volume naming and cleanup
 - systemd unit naming

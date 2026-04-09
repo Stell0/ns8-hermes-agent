@@ -23,7 +23,7 @@ ExecStart=/usr/bin/podman run \
     --sdnotify=conmon \
     --cgroups=no-conmon \
     --publish 127.0.0.1:${HERMES_SYSTEM_API_PORT}:8642 \
-    --volume hermes-agent-hermes-data-0:/opt/data \
+    --volume hermes-agent-hermes-data-0:/opt/data:z \
     --env-file %S/state/agent-0.env \
     --env-file %S/state/agent-0_secrets.env \
     ${HERMES_AGENT_HERMES_IMAGE}

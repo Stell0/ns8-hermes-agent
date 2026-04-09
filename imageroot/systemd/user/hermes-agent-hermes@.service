@@ -22,7 +22,7 @@ ExecStart=/usr/bin/podman run \
     --rm \
     --sdnotify=conmon \
     --cgroups=no-conmon \
-    --volume hermes-agent-hermes-data-%i:/opt/data \
+    --volume hermes-agent-hermes-data-%i:/opt/data:z \
     --env-file %S/state/agent-%i.env \
     --env-file %S/state/agent-%i_secrets.env \
     ${HERMES_AGENT_HERMES_IMAGE}

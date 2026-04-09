@@ -35,22 +35,22 @@ Hermes manager components that are not yet present in the tree.
 
 - `configure-module/20configure`: validates the user-facing `agents` payload plus shared `openviking` settings, persists `AGENTS_LIST`, and stores the shared embedding provider and secret.
 - `configure-module/80start_services`: shell wrapper that delegates per-agent runtime reconciliation to `start-agent-services`.
-- `configure-module/validate-input.json`: input schema for `configure-module`, including agent validation.
+- `configure-module/validate-input.json`: input schema for `configure-module`, including agent validation and the per-agent `use_default_gateway_for_llm` flag.
 - `get-configuration/20read`: parses `AGENTS_LIST` from `environment`, synthesizes the hidden reserved system agent, and returns the current agents plus shared OpenViking embedding state.
-- `get-configuration/validate-output.json`: output schema for the structured `agents` and shared `openviking` response.
+- `get-configuration/validate-output.json`: output schema for the structured `agents` and shared `openviking` response, including the per-agent shared-gateway flag.
 - `destroy-module/20destroy`: stops and cleans all per-agent units, runtime containers, named volumes, generated runtime files, and the shared OpenViking runtime.
 
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings, merges public values into `environment`, and writes `SMTP_PASSWORD` to `secrets.env`.
-- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generating and preserving one shared OpenViking root key, one reserved Hermes API key for the hidden system backend, and per-agent tenant metadata.
+- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generating and preserving one shared OpenViking root key, one reserved Hermes API key for the hidden system backend, per-agent tenant metadata, and Hermes-native config in each agent volume for agents that opt into the shared LLM gateway.
 - `ensure-openviking-tenant`: waits for the shared OpenViking service, provisions the per-agent account and user if needed, and writes the tenant API key to `agent-<id>_secrets.env`.
 - `start-agent-services`: reconciles the shared OpenViking service, the dedicated system Hermes backend service, and per-agent systemd targets after `configure-module`.
 - `reload-agent-services`: refreshes active agent targets after smarthost changes.
 
 ### `imageroot/pypkg/`
 
-- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, hidden system-agent synthesis, shared embedding settings, runtime-file generation, shared OpenViking provisioning, per-agent volume naming and cleanup, and systemd status checks.
+- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, hidden system-agent synthesis, shared embedding settings, runtime-file generation, Hermes config synchronization for opted-in agents, shared OpenViking provisioning, per-agent volume naming and cleanup, and systemd status checks.
 
 ### `imageroot/events/`
 
@@ -86,7 +86,7 @@ The embedded admin UI currently uses Vue 2 and Vue CLI.
 - `src/router/index.js`: router with `status`, `settings`, and `about` views.
 - `src/store/index.js`: Vuex store for embedded module context.
 - `src/views/`: page scaffolds for status, settings, and about.
-- `src/views/Settings.vue`: shared OpenViking embedding settings plus agent-management settings view with table actions, modal creation, hidden system-agent filtering, warning UX, and `configure-module` integration.
+- `src/views/Settings.vue`: shared OpenViking embedding settings plus agent-management settings view with table actions, create and edit modals, hidden system-agent filtering, per-agent shared-gateway checkbox, warning UX, and `configure-module` integration.
 - `src/components/`: side menu components.
 - `src/i18n/index.js`: runtime language loading.
 - `src/styles/`: shared Carbon utility styles.
