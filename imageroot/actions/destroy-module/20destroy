@@ -26,3 +26,5 @@ for agent_data in runtime_module.read_agents_from_state():
 
 for agent_id in sorted(agent_ids):
     runtime_module.cleanup_agent_runtime(agent_id)
+
+runtime_module.cleanup_shared_openviking_runtime()

@@ -1,8 +1,14 @@
 import json
 import os
 import re
+import secrets
+import socket
 import subprocess
+import time
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 import agent
 
@@ -12,15 +18,27 @@ SHARED_SECRETS_ENVFILE = "secrets.env"
 SYSTEMD_ENVFILE = "systemd.env"
 LEGACY_AGENTS_ENVFILE = "agents.env"
 LEGACY_SMARTHOST_ENVFILE = "smarthost.env"
+SHARED_OPENVIKING_CONFIGFILE = "openviking.conf"
 ALLOWED_ROLES = {"default", "developer"}
 ALLOWED_STATUSES = {"start", "stop"}
 NAME_PATTERN = re.compile(r"^[A-Za-z ]+$")
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 AGENT_ENVFILE_PATTERN = re.compile(r"^agent-(\d+)\.env$")
 AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent-(\d+)_secrets\.env$")
 AGENT_OPENVIKING_CONFIG_PATTERN = re.compile(r"^agent-(\d+)_openviking\.conf$")
 SYSTEMD_TARGET_PATTERN = re.compile(r"^hermes-agent@(\d+)\.target$")
 OPENVIKING_CONFIG_PATH = "/app/ov.conf"
 OPENVIKING_WORKSPACE_PATH = "/app/data"
+OPENVIKING_PORT_ENV = "OPENVIKING_PORT"
+OPENVIKING_ROOT_API_KEY_ENV = "OPENVIKING_ROOT_API_KEY"
+OPENVIKING_TENANT_MODE_ENV = "OPENVIKING_TENANT_MODE"
+OPENVIKING_AGENT_ID_ENV = "OPENVIKING_AGENT_ID"
+OPENVIKING_TENANT_MODE = "shared"
+OPENVIKING_LOCAL_HOST = "127.0.0.1"
+OPENVIKING_CONTAINER_HOST = "host.containers.internal"
+OPENVIKING_LISTEN_HOST = "0.0.0.0"
+OPENVIKING_CONTAINER_PORT = 1933
+OPENVIKING_HEALTH_TIMEOUT = 60
 SMTP_PUBLIC_KEYS = (
     "SMTP_ENABLED",
     "SMTP_HOST",
@@ -30,6 +48,34 @@ SMTP_PUBLIC_KEYS = (
     "SMTP_TLSVERIFY",
 )
 SMTP_SECRET_KEYS = ("SMTP_PASSWORD",)
+AGENT_SECRET_KEYS = ("OPENVIKING_API_KEY",)
+SYSTEMD_ENV_KEYS = {OPENVIKING_PORT_ENV}
+
+
+def default_openviking_account(agent_id):
+    return f"agent-{agent_id}"
+
+
+def default_openviking_user(agent_id):
+    return f"agent-{agent_id}"
+
+
+def default_openviking_agent_id(agent_id):
+    return f"agent-{agent_id}"
+
+
+def normalize_identifier(value, default_value, label):
+    if value is None:
+        return default_value
+
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+
+    normalized_value = value.strip()
+    if not normalized_value or not IDENTIFIER_PATTERN.fullmatch(normalized_value):
+        raise ValueError(f"{label} must match {IDENTIFIER_PATTERN.pattern}")
+
+    return normalized_value
 
 
 def validate_agents(raw_agents):
@@ -41,6 +87,7 @@ def validate_agents(raw_agents):
 
     normalized_agents = []
     seen_ids = set()
+    seen_accounts = set()
 
     for index, raw_agent in enumerate(raw_agents):
         if not isinstance(raw_agent, dict):
@@ -67,22 +114,55 @@ def validate_agents(raw_agents):
         if status not in ALLOWED_STATUSES:
             raise ValueError(f"agent at index {index} has an invalid status")
 
+        account = normalize_identifier(
+            raw_agent.get("account"),
+            default_openviking_account(agent_id),
+            f"agent at index {index} has an invalid account",
+        )
+        if account in seen_accounts:
+            raise ValueError(f"agent account {account} is duplicated")
+
+        user = normalize_identifier(
+            raw_agent.get("user"),
+            default_openviking_user(agent_id),
+            f"agent at index {index} has an invalid user",
+        )
+        openviking_agent_id = normalize_identifier(
+            raw_agent.get("agent_id"),
+            default_openviking_agent_id(agent_id),
+            f"agent at index {index} has an invalid agent_id",
+        )
+
         normalized_agents.append(
             {
                 "id": agent_id,
                 "name": name,
                 "role": role,
                 "status": status,
+                "account": account,
+                "user": user,
+                "agent_id": openviking_agent_id,
             }
         )
         seen_ids.add(agent_id)
+        seen_accounts.add(account)
 
     return sorted(normalized_agents, key=lambda item: item["id"])
 
 
 def serialize_agents(agents):
     return ",".join(
-        f"{agent_data['id']}:{agent_data['name']}:{agent_data['role']}:{agent_data['status']}"
+        ":".join(
+            [
+                str(agent_data["id"]),
+                agent_data["name"],
+                agent_data["role"],
+                agent_data["status"],
+                agent_data["account"],
+                agent_data["user"],
+                agent_data["agent_id"],
+            ]
+        )
         for agent_data in sorted(agents, key=lambda item: item["id"])
     )
 
@@ -93,19 +173,19 @@ def parse_agents_list(raw_agents_list):
 
     agents = []
     seen_ids = set()
+    seen_accounts = set()
     for raw_agent in raw_agents_list.split(","):
         serialized_agent = raw_agent.strip()
         if not serialized_agent:
             continue
 
-        parts = serialized_agent.split(":", 3)
-        if len(parts) == 3:
-            agent_id, name, role = parts
-            status = "start"
-        elif len(parts) == 4:
-            agent_id, name, role, status = parts
-        else:
+        parts = serialized_agent.split(":", 6)
+        if len(parts) in {3, 4}:
+            return []
+        if len(parts) != 7:
             raise ValueError(f"invalid AGENTS_LIST entry: {serialized_agent}")
+
+        agent_id, name, role, status, account, user, openviking_agent_id = parts
 
         normalized_name = name.strip()
 
@@ -121,6 +201,14 @@ def parse_agents_list(raw_agents_list):
             raise ValueError(f"invalid AGENTS_LIST role: {role}")
         if status not in ALLOWED_STATUSES:
             raise ValueError(f"invalid AGENTS_LIST status: {status}")
+        if not IDENTIFIER_PATTERN.fullmatch(account):
+            raise ValueError(f"invalid AGENTS_LIST account: {account}")
+        if account in seen_accounts:
+            raise ValueError(f"duplicated AGENTS_LIST account: {account}")
+        if not IDENTIFIER_PATTERN.fullmatch(user):
+            raise ValueError(f"invalid AGENTS_LIST user: {user}")
+        if not IDENTIFIER_PATTERN.fullmatch(openviking_agent_id):
+            raise ValueError(f"invalid AGENTS_LIST agent_id: {openviking_agent_id}")
 
         agents.append(
             {
@@ -128,9 +216,13 @@ def parse_agents_list(raw_agents_list):
                 "name": normalized_name,
                 "role": role,
                 "status": status,
+                "account": account,
+                "user": user,
+                "agent_id": openviking_agent_id,
             }
         )
         seen_ids.add(normalized_id)
+        seen_accounts.add(account)
 
     return sorted(agents, key=lambda item: item["id"])
 
@@ -176,6 +268,10 @@ def agent_openviking_configfile(agent_id):
     return f"agent-{agent_id}_openviking.conf"
 
 
+def shared_openviking_configfile():
+    return SHARED_OPENVIKING_CONFIGFILE
+
+
 def pod_name(agent_id):
     return f"hermes-agent-{agent_id}"
 
@@ -184,8 +280,12 @@ def hermes_data_volume(agent_id):
     return f"hermes-agent-hermes-data-{agent_id}"
 
 
-def openviking_data_volume(agent_id):
+def legacy_openviking_data_volume(agent_id):
     return f"hermes-agent-openviking-data-{agent_id}"
+
+
+def shared_openviking_data_volume():
+    return "hermes-agent-openviking-data"
 
 
 def target_unit(agent_id):
@@ -198,14 +298,25 @@ def pod_service_unit(agent_id):
 
 def container_service_units(agent_id):
     return [
-        f"hermes-agent-openviking@{agent_id}.service",
         f"hermes-agent-hermes@{agent_id}.service",
         f"hermes-agent-gateway@{agent_id}.service",
     ]
 
 
 def managed_service_units(agent_id):
-    return [pod_service_unit(agent_id), *container_service_units(agent_id)]
+    return [
+        shared_openviking_service_unit(),
+        pod_service_unit(agent_id),
+        *container_service_units(agent_id),
+    ]
+
+
+def shared_openviking_service_unit():
+    return "hermes-agent-openviking.service"
+
+
+def shared_openviking_container_name():
+    return "hermes-agent-openviking"
 
 
 def run_command(command, check=True, capture_output=False):
@@ -295,12 +406,60 @@ def write_jsonfile(path, data):
     Path(path).write_text(f"{json.dumps(data, indent=2)}\n", encoding="utf-8")
 
 
+def valid_port_value(value):
+    return isinstance(value, str) and value.isdigit() and 1 <= int(value) <= 65535
+
+
+def reserve_tcp_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.bind((OPENVIKING_LOCAL_HOST, 0))
+        return server_socket.getsockname()[1]
+
+
+def ensure_shared_openviking_settings(shared_environment, shared_secrets):
+    port_value = shared_environment.get(OPENVIKING_PORT_ENV)
+    if not valid_port_value(port_value):
+        port_value = str(reserve_tcp_port())
+        agent.set_env(OPENVIKING_PORT_ENV, port_value)
+        shared_environment[OPENVIKING_PORT_ENV] = port_value
+
+    root_api_key = shared_secrets.get(OPENVIKING_ROOT_API_KEY_ENV)
+    if not root_api_key:
+        root_api_key = generate_agent_secret(OPENVIKING_ROOT_API_KEY_ENV)
+        shared_secrets = {**shared_secrets, OPENVIKING_ROOT_API_KEY_ENV: root_api_key}
+        write_envfile(SHARED_SECRETS_ENVFILE, shared_secrets)
+
+    return int(port_value), root_api_key
+
+
+def openviking_port(shared_environment):
+    port_value = shared_environment.get(OPENVIKING_PORT_ENV)
+    if not valid_port_value(port_value):
+        raise ValueError(f"invalid {OPENVIKING_PORT_ENV}: {port_value}")
+
+    return int(port_value)
+
+
+def openviking_host_endpoint(shared_environment):
+    return f"http://{OPENVIKING_LOCAL_HOST}:{openviking_port(shared_environment)}"
+
+
+def openviking_container_endpoint(shared_environment):
+    return f"http://{OPENVIKING_CONTAINER_HOST}:{openviking_port(shared_environment)}"
+
+
 def build_agent_public_env(agent_data, shared_environment):
     env_data = {
-        "AGENT_ID": str(agent_data["id"]),
+        "AGENT_ID": agent_data["agent_id"],
+        "AGENT_INSTANCE_ID": str(agent_data["id"]),
         "AGENT_NAME": agent_data["name"],
         "AGENT_ROLE": agent_data["role"],
         "AGENT_STATUS": agent_data["status"],
+        OPENVIKING_AGENT_ID_ENV: agent_data["agent_id"],
+        OPENVIKING_TENANT_MODE_ENV: OPENVIKING_TENANT_MODE,
+        "OPENVIKING_ENDPOINT": openviking_container_endpoint(shared_environment),
+        "OPENVIKING_ACCOUNT": agent_data["account"],
+        "OPENVIKING_USER": agent_data["user"],
     }
 
     module_id = os.environ.get("MODULE_ID")
@@ -315,27 +474,59 @@ def build_agent_public_env(agent_data, shared_environment):
     return env_data
 
 
-def build_agent_secrets_env(shared_secrets):
-    return {
-        key: value
-        for key in SMTP_SECRET_KEYS
-        if (value := shared_secrets.get(key)) is not None
-    }
+def openviking_user(agent_data):
+    return agent_data["user"]
+
+
+def can_preserve_agent_api_key(existing_agent_env, agent_data):
+    existing_agent_id = existing_agent_env.get(OPENVIKING_AGENT_ID_ENV) or existing_agent_env.get("AGENT_ID")
+    return (
+        existing_agent_env.get(OPENVIKING_TENANT_MODE_ENV) == OPENVIKING_TENANT_MODE
+        and existing_agent_env.get("OPENVIKING_ACCOUNT") == agent_data["account"]
+        and existing_agent_env.get("OPENVIKING_USER") == agent_data["user"]
+        and existing_agent_id == agent_data["agent_id"]
+    )
+
+
+def generate_agent_secret(_key):
+    return secrets.token_hex(32)
+
+
+def build_agent_secrets_env(
+    shared_secrets,
+    existing_agent_secrets=None,
+    preserve_openviking_api_key=False,
+):
+    existing_agent_secrets = existing_agent_secrets or {}
+    env_data = {}
+    if preserve_openviking_api_key and existing_agent_secrets.get("OPENVIKING_API_KEY"):
+        env_data["OPENVIKING_API_KEY"] = existing_agent_secrets["OPENVIKING_API_KEY"]
+
+    env_data.update(
+        {
+            key: value
+            for key in SMTP_SECRET_KEYS
+            if (value := shared_secrets.get(key)) is not None
+        }
+    )
+    return env_data
 
 
 def build_systemd_environment(shared_environment):
     return {
         key: value
         for key, value in shared_environment.items()
-        if key.endswith("_IMAGE")
+        if key.endswith("_IMAGE") or key in SYSTEMD_ENV_KEYS
     }
 
 
-def build_openviking_config(agent_data):
+def build_openviking_config(shared_secrets):
     return {
         "server": {
-            "host": "127.0.0.1",
-            "port": 1933,
+            "host": OPENVIKING_LISTEN_HOST,
+            "port": OPENVIKING_CONTAINER_PORT,
+            "auth_mode": "api_key",
+            "root_api_key": shared_secrets[OPENVIKING_ROOT_API_KEY_ENV],
         },
         "storage": {
             "workspace": OPENVIKING_WORKSPACE_PATH,
@@ -350,10 +541,199 @@ def build_openviking_config(agent_data):
             "level": "INFO",
             "output": "stdout",
         },
-        "default_account": "default",
-        "default_user": agent_data["name"].lower().replace(" ", "-"),
-        "default_agent": f"agent-{agent_data['id']}",
     }
+
+
+def parse_json_bytes(payload):
+    if not payload:
+        return {}
+
+    decoded_payload = payload.decode("utf-8")
+    if not decoded_payload:
+        return {}
+
+    try:
+        return json.loads(decoded_payload)
+    except json.JSONDecodeError:
+        return {"raw": decoded_payload}
+
+
+def openviking_request(method, path, port, api_key=None, data=None, query=None):
+    url = f"http://{OPENVIKING_LOCAL_HOST}:{port}{path}"
+    if query:
+        url = f"{url}?{urllib_parse.urlencode(query)}"
+
+    headers = {}
+    payload = None
+    if api_key:
+        headers["X-API-Key"] = api_key
+    if data is not None:
+        payload = json.dumps(data).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    request = urllib_request.Request(url, data=payload, headers=headers, method=method)
+    try:
+        with urllib_request.urlopen(request, timeout=10) as response:
+            return response.status, parse_json_bytes(response.read())
+    except urllib_error.HTTPError as error:
+        return error.code, parse_json_bytes(error.read())
+    except urllib_error.URLError as error:
+        raise RuntimeError(f"OpenViking request failed: {error.reason}") from error
+
+
+def response_is_success(status_code):
+    return 200 <= status_code < 300
+
+
+def wait_for_openviking(port, timeout=OPENVIKING_HEALTH_TIMEOUT):
+    deadline = time.time() + timeout
+    last_error = None
+
+    while time.time() < deadline:
+        try:
+            status_code, _ = openviking_request("GET", "/health", port)
+            if response_is_success(status_code):
+                return
+            last_error = f"health endpoint returned HTTP {status_code}"
+        except RuntimeError as error:
+            last_error = str(error)
+
+        time.sleep(1)
+
+    raise RuntimeError(f"OpenViking did not become ready: {last_error or 'timeout'}")
+
+
+def extract_user_key(response_payload, context):
+    user_key = response_payload.get("result", {}).get("user_key")
+    if user_key:
+        return user_key
+
+    raise RuntimeError(f"OpenViking {context} response did not include a user_key")
+
+
+def openviking_user_key_is_valid(port, user_key):
+    status_code, _ = openviking_request(
+        "GET",
+        "/api/v1/fs/ls",
+        port,
+        api_key=user_key,
+        query={"uri": "viking://"},
+    )
+    return response_is_success(status_code)
+
+
+def provision_openviking_tenant(port, root_api_key, agent_data):
+    account_id = agent_data["account"]
+    user_id = agent_data["user"]
+    account_path = "/api/v1/admin/accounts"
+
+    status_code, response_payload = openviking_request(
+        "POST",
+        account_path,
+        port,
+        api_key=root_api_key,
+        data={
+            "account_id": account_id,
+            "admin_user_id": user_id,
+        },
+    )
+    if response_is_success(status_code):
+        return extract_user_key(response_payload, "create-account")
+
+    user_path = f"{account_path}/{urllib_parse.quote(account_id)}/users"
+    status_code, response_payload = openviking_request(
+        "POST",
+        user_path,
+        port,
+        api_key=root_api_key,
+        data={"user_id": user_id, "role": "admin"},
+    )
+    if response_is_success(status_code):
+        return extract_user_key(response_payload, "register-user")
+
+    openviking_request(
+        "PUT",
+        f"{user_path}/{urllib_parse.quote(user_id)}/role",
+        port,
+        api_key=root_api_key,
+        data={"role": "admin"},
+    )
+    status_code, response_payload = openviking_request(
+        "POST",
+        f"{user_path}/{urllib_parse.quote(user_id)}/key",
+        port,
+        api_key=root_api_key,
+    )
+    if response_is_success(status_code):
+        return extract_user_key(response_payload, "regenerate-key")
+
+    raise RuntimeError(
+        "Unable to provision OpenViking tenant "
+        f"{account_id}/{user_id}: create-account, register-user, and regenerate-key failed"
+    )
+
+
+def ensure_agent_openviking_tenant(agent_id):
+    agent_data = next(
+        (item for item in read_agents_from_state() if item["id"] == agent_id),
+        None,
+    )
+    if agent_data is None:
+        raise ValueError(f"agent {agent_id} not found")
+
+    shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
+    shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
+    port, root_api_key = ensure_shared_openviking_settings(shared_environment, shared_secrets)
+    wait_for_openviking(port)
+
+    shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
+    agent_secrets = read_optional_envfile(agent_secrets_envfile(agent_id))
+    existing_user_key = agent_secrets.get("OPENVIKING_API_KEY")
+    if existing_user_key and openviking_user_key_is_valid(port, existing_user_key):
+        write_envfile(
+            agent_secrets_envfile(agent_id),
+            build_agent_secrets_env(
+                shared_secrets,
+                existing_agent_secrets=agent_secrets,
+                preserve_openviking_api_key=True,
+            ),
+        )
+        return existing_user_key
+
+    user_key = provision_openviking_tenant(port, root_api_key, agent_data)
+    updated_agent_secrets = build_agent_secrets_env(shared_secrets)
+    updated_agent_secrets["OPENVIKING_API_KEY"] = user_key
+    write_envfile(agent_secrets_envfile(agent_id), updated_agent_secrets)
+    return user_key
+
+
+def remove_agent_openviking_account(agent_id):
+    agent_environment = read_optional_envfile(agent_envfile(agent_id))
+    if agent_environment.get(OPENVIKING_TENANT_MODE_ENV) != OPENVIKING_TENANT_MODE:
+        return
+
+    account_id = agent_environment.get("OPENVIKING_ACCOUNT")
+    if not account_id or not unit_is_active(shared_openviking_service_unit()):
+        return
+
+    shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
+    shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
+    root_api_key = shared_secrets.get(OPENVIKING_ROOT_API_KEY_ENV)
+    port_value = shared_environment.get(OPENVIKING_PORT_ENV)
+    if not root_api_key or not valid_port_value(port_value):
+        return
+
+    wait_for_openviking(int(port_value))
+    status_code, _ = openviking_request(
+        "DELETE",
+        f"/api/v1/admin/accounts/{urllib_parse.quote(account_id)}",
+        int(port_value),
+        api_key=root_api_key,
+    )
+    if response_is_success(status_code) or status_code == 404:
+        return
+
+    raise RuntimeError(f"Unable to delete OpenViking account {account_id}: HTTP {status_code}")
 
 
 def remove_agent_runtime_files(agent_id):
@@ -367,8 +747,19 @@ def remove_agent_runtime_files(agent_id):
 
 
 def remove_agent_volumes(agent_id):
-    for volume_name in (hermes_data_volume(agent_id), openviking_data_volume(agent_id)):
+    for volume_name in (hermes_data_volume(agent_id), legacy_openviking_data_volume(agent_id)):
         run_command(["podman", "volume", "rm", "--force", volume_name], check=False)
+
+
+def cleanup_shared_openviking_runtime():
+    systemctl_user("stop", shared_openviking_service_unit(), check=False)
+    run_command(
+        ["podman", "volume", "rm", "--force", shared_openviking_data_volume()],
+        check=False,
+    )
+    shared_configfile = shared_openviking_configfile()
+    if os.path.exists(shared_configfile):
+        os.remove(shared_configfile)
 
 
 def sync_agent_runtime_files(agent_id=None):
@@ -376,7 +767,12 @@ def sync_agent_runtime_files(agent_id=None):
     shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
     shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
 
+    ensure_shared_openviking_settings(shared_environment, shared_secrets)
+    shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
+    shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
+
     write_envfile(SYSTEMD_ENVFILE, build_systemd_environment(shared_environment))
+    write_jsonfile(shared_openviking_configfile(), build_openviking_config(shared_secrets))
 
     if agent_id is not None:
         filtered_agents = [item for item in agents if item["id"] == agent_id]
@@ -387,18 +783,24 @@ def sync_agent_runtime_files(agent_id=None):
     current_ids = {item["id"] for item in read_agents_from_state()}
 
     for agent_data in agents:
+        existing_agent_env = read_optional_envfile(agent_envfile(agent_data["id"]))
+        existing_agent_secrets = read_optional_envfile(agent_secrets_envfile(agent_data["id"]))
+        agent_secrets = build_agent_secrets_env(
+            shared_secrets,
+            existing_agent_secrets=existing_agent_secrets,
+            preserve_openviking_api_key=can_preserve_agent_api_key(existing_agent_env, agent_data),
+        )
         write_envfile(
             agent_envfile(agent_data["id"]),
             build_agent_public_env(agent_data, shared_environment),
         )
         write_envfile(
             agent_secrets_envfile(agent_data["id"]),
-            build_agent_secrets_env(shared_secrets),
+            agent_secrets,
         )
-        write_jsonfile(
-            agent_openviking_configfile(agent_data["id"]),
-            build_openviking_config(agent_data),
-        )
+        legacy_configfile = agent_openviking_configfile(agent_data["id"])
+        if os.path.exists(legacy_configfile):
+            os.remove(legacy_configfile)
 
     if agent_id is None:
         for stale_id in scan_generated_agent_ids():
@@ -415,6 +817,7 @@ def stop_disable_agent(agent_id):
 
 def cleanup_agent_runtime(agent_id):
     stop_disable_agent(agent_id)
+    remove_agent_openviking_account(agent_id)
     remove_agent_volumes(agent_id)
     remove_agent_runtime_files(agent_id)
 

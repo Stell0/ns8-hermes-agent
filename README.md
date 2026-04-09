@@ -8,9 +8,9 @@ Older docs in this repository may still describe a larger Hermes manager archite
 
 - module image built by `build-images.sh` and labeled with three dependent wrapper images under `containers/`
 - custom actions: `configure-module`, `get-configuration`, and `destroy-module`
-- `configure-module` validates an `agents` payload, stores `AGENTS_LIST` in `environment`, generates per-agent env files, secrets files, and OpenViking config files, and reconciles per-agent systemd targets
-- each started agent gets its own rootless Podman pod managed by systemd, with `openviking`, `hermes`, and `hermes-gateway` containers
-- each started agent also gets two internal named Podman volumes: one mounted at Hermes `/opt/data` for gateway state, and one mounted at OpenViking `/app/data` for context storage
+- `configure-module` validates an `agents` payload, stores `AGENTS_LIST` in `environment`, generates per-agent env and secrets files plus one shared OpenViking server config, and reconciles per-agent systemd targets
+- the module now runs one shared rootless OpenViking container per module instance, while each started agent still gets its own rootless Podman pod for the Hermes runtime and gateway containers
+- each started agent gets one internal named Podman volume mounted at Hermes `/opt/data`, and the module also keeps one shared OpenViking named volume mounted at `/app/data` for the shared multi-tenant OpenViking server
 - those named volumes are internal to the module for now; the image does not yet declare `org.nethserver.volumes` for NS8 disk-placement integration
 - `get-configuration` returns the configured agents parsed from `AGENTS_LIST` and reports actual runtime status from systemd
 - smarthost discovery helper plus a `smarthost-changed` handler that refreshes active per-agent targets
@@ -87,10 +87,13 @@ agents. Each agent contains:
 - `role`: one of `default` or `developer`
 - `status`: one of `start` or `stop`; it is persisted and used to decide whether
     the per-agent systemd target should be running
+- hidden backend-only fields `account`, `user`, and `agent_id`: these are
+    auto-generated today, persisted with the roster, and used to provision the
+    agent inside the shared OpenViking server
 
 The persisted runtime value is stored in `environment` as:
 
-        AGENTS_LIST=1:Foo Bar:developer:start,2:Alice User:default:stop
+    AGENTS_LIST=1:Foo Bar:developer:start:agent-1:agent-1:agent-1,2:Alice User:default:stop:agent-2:agent-2:agent-2
 
 Example:
 
@@ -98,10 +101,13 @@ Example:
 
 The above command will:
 - validate and store the agent roster in `environment`
-- generate `agent-<id>.env`, `agent-<id>_secrets.env`, and `agent-<id>_openviking.conf` files for each agent
-- generate `systemd.env` with only the controlled image variables needed by systemd units
+- generate `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env`
+- generate and preserve one shared `OPENVIKING_ROOT_API_KEY` in `secrets.env`
+- provision one OpenViking account and admin user per started agent and store that tenant user key as `OPENVIKING_API_KEY` in `agent-<id>_secrets.env`
+- generate `systemd.env` with only the controlled image variables needed by systemd units, including the internal shared OpenViking host port
 - start or stop the matching `hermes-agent@<id>.target` instances based on the saved status
-- create or clean the matching per-agent named volumes as containers are started or removed
+- create or clean the matching per-agent Hermes named volumes as containers are started or removed
+- keep the shared OpenViking volume and shared server runtime outside the per-agent targets
 
 Read the current configuration with:
 
@@ -109,25 +115,30 @@ Read the current configuration with:
 
 Example output:
 
-    {"agents": [{"id": 1, "name": "Foo Bar", "role": "developer", "status": "start"}]}
+    {"agents": [{"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "account": "agent-1", "user": "agent-1", "agent_id": "agent-1"}]}
 
 `status` is returned from the actual systemd-backed runtime state, not only from
 the desired configuration.
 
 Started agents enable a templated user target named `hermes-agent@<id>.target`.
-That target brings up a Podman pod plus three container services:
+That target brings up a Podman pod plus two per-agent container services, while
+all started agents share one OpenViking service:
 
+- `hermes-agent-openviking.service`
 - `hermes-agent-pod@<id>.service`
-- `hermes-agent-openviking@<id>.service`
 - `hermes-agent-hermes@<id>.service`
 - `hermes-agent-gateway@<id>.service`
 
 The persistent storage contract is currently:
 
 - `hermes-agent-gateway@<id>.service` mounts `hermes-agent-hermes-data-<id>` at `/opt/data`
-- `hermes-agent-openviking@<id>.service` mounts `hermes-agent-openviking-data-<id>` at `/app/data`
-- `hermes-agent-openviking@<id>.service` also bind-mounts the generated `agent-<id>_openviking.conf` to `/app/ov.conf`
-- the idle `hermes-agent-hermes@<id>.service` container remains ephemeral in the current scaffold
+- `hermes-agent-hermes@<id>.service` mounts the same `hermes-agent-hermes-data-<id>` volume at `/opt/data`
+- `hermes-agent-openviking.service` mounts the shared volume `hermes-agent-openviking-data` at `/app/data`
+- `hermes-agent-openviking.service` bind-mounts the generated shared `openviking.conf` to `/app/ov.conf`
+
+The idle Hermes container stays passive in the current scaffold, so the shared
+Hermes home is still owned operationally by the gateway and is not used by two
+active Hermes processes at once.
 
 The gateway wrapper now keeps the upstream Hermes Docker entrypoint, so first
 start still bootstraps `/opt/data` with default `.env`, `config.yaml`,
@@ -139,9 +150,14 @@ Some settings are discovered from Redis rather than passed through the
 `configure-module` input. The helper `imageroot/bin/discover-smarthost`
 writes public SMTP settings into `environment` and `SMTP_PASSWORD` into
 `secrets.env`. The helper `imageroot/bin/sync-agent-runtime` then copies only
-the agent-specific runtime data into `agent-<id>.env`,
-`agent-<id>_secrets.env`, and `agent-<id>_openviking.conf` so each pod consumes
-only its own runtime files. The event handler
+the agent-specific runtime data into `agent-<id>.env` and
+`agent-<id>_secrets.env`, and writes one shared `openviking.conf` plus
+`systemd.env`. The generated per-agent files include the shared OpenViking
+endpoint plus tenant-scoped `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and
+`OPENVIKING_AGENT_ID` values in `agent-<id>.env`, and the matching tenant
+`OPENVIKING_API_KEY` in `agent-<id>_secrets.env`. The shared `secrets.env`
+keeps `OPENVIKING_ROOT_API_KEY` for the shared server alongside `SMTP_PASSWORD`.
+The event handler
 `imageroot/events/smarthost-changed/10reload_services` refreshes active agent
 targets when cluster smarthost settings change.
 
@@ -167,9 +183,10 @@ Run the module test with:
     ./test-module.sh <NODE_ADDR> ghcr.io/nethserver/hermes-agent:latest
 
 The checked-in test suite is written with [Robot Framework](https://robotframework.org/) and
-currently validates per-agent runtime file generation, actual runtime status
-from `get-configuration`, per-agent target plus container service state, Podman
-pod presence, named volume creation, persistence across target restart,
+currently validates shared OpenViking runtime generation, actual runtime status
+from `get-configuration`, per-agent target plus container service state, tenant
+account isolation through the shared OpenViking admin API, named volume
+creation, persistence across target restart, stopped-agent runtime cleanup,
 reconfiguration cleanup, and module removal.
 
 ## UI translation

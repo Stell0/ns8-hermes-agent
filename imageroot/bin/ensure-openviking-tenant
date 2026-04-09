@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
+from hermes_agent_runtime import ensure_agent_openviking_tenant
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Ensure a shared OpenViking tenant exists for one agent")
+    parser.add_argument("--agent-id", type=int, required=True, help="Ensure one agent tenant")
+    args = parser.parse_args()
+
+    try:
+        ensure_agent_openviking_tenant(agent_id=args.agent_id)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    except RuntimeError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

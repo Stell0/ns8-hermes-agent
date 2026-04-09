@@ -472,12 +472,23 @@ export default {
     normalizeAgents(agents) {
       return agents
         .map((agentData) => {
-          return {
+          const normalizedAgent = {
             id: Number(agentData.id),
             name: (agentData.name || "").trim(),
             role: agentData.role,
             status: agentData.status === "stop" ? "stop" : "start",
           };
+
+          for (const field of ["account", "user", "agent_id"]) {
+            if (typeof agentData[field] === "string") {
+              const normalizedValue = agentData[field].trim();
+              if (normalizedValue) {
+                normalizedAgent[field] = normalizedValue;
+              }
+            }
+          }
+
+          return normalizedAgent;
         })
         .filter((agentData) => {
           return (

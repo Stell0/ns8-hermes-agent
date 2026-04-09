@@ -7,15 +7,22 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 
 from hermes_agent_runtime import (
+    OPENVIKING_TENANT_MODE,
+    OPENVIKING_TENANT_MODE_ENV,
     LEGACY_AGENTS_ENVFILE,
     LEGACY_SMARTHOST_ENVFILE,
     SHARED_SECRETS_ENVFILE,
+    agent_envfile,
+    cleanup_agent_runtime,
     list_known_agent_ids,
-    remove_agent_volumes,
+    read_optional_envfile,
     read_agents_from_state,
-    stop_disable_agent,
+    shared_openviking_service_unit,
     sync_agent_runtime_files,
     target_unit,
+    wait_for_openviking,
+    openviking_port,
+    ENVIRONMENT_FILE,
 )
 
 
@@ -24,8 +31,24 @@ def run(command, check=True):
 
 
 def cleanup_agent(agent_id):
-    stop_disable_agent(agent_id)
-    remove_agent_volumes(agent_id)
+    cleanup_agent_runtime(agent_id)
+
+
+def agent_uses_shared_openviking(agent_id):
+    return (
+        read_optional_envfile(agent_envfile(agent_id)).get(OPENVIKING_TENANT_MODE_ENV)
+        == OPENVIKING_TENANT_MODE
+    )
+
+
+def start_shared_openviking():
+    run(["systemctl", "--user", "start", shared_openviking_service_unit()])
+    shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
+    wait_for_openviking(openviking_port(shared_environment))
+
+
+def stop_shared_openviking():
+    run(["systemctl", "--user", "stop", shared_openviking_service_unit()], check=False)
 
 
 def restart_agent(agent_id):
@@ -42,6 +65,15 @@ run(["runagent", "discover-smarthost"])
 current_agents = read_agents_from_state()
 current_ids = {agent_data["id"] for agent_data in current_agents}
 sync_agent_runtime_files()
+started_agents = [agent_data for agent_data in current_agents if agent_data["status"] == "start"]
+shared_cleanup_ids = {
+    agent_id
+    for agent_id in known_agent_ids | current_ids
+    if agent_uses_shared_openviking(agent_id)
+}
+
+if started_agents or shared_cleanup_ids:
+    start_shared_openviking()
 
 for stale_agent_id in sorted(known_agent_ids - current_ids):
     cleanup_agent(stale_agent_id)
@@ -51,5 +83,8 @@ for agent_data in current_agents:
         restart_agent(agent_data["id"])
     else:
         cleanup_agent(agent_data["id"])
+
+if not started_agents:
+    stop_shared_openviking()
 
 sys.exit(0)

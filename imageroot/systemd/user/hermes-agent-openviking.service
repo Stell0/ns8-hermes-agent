@@ -1,0 +1,28 @@
+[Unit]
+Description=Hermes shared OpenViking container
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=-%S/state/systemd.env
+WorkingDirectory=%S/state
+Restart=always
+KillMode=none
+Type=notify
+NotifyAccess=all
+ExecStartPre=-/usr/bin/podman rm --force hermes-agent-openviking
+ExecStart=/usr/bin/podman run \
+    --name hermes-agent-openviking \
+    --replace \
+    --rm \
+    --sdnotify=conmon \
+    --cgroups=no-conmon \
+    --publish 127.0.0.1:${OPENVIKING_PORT}:1933 \
+    --volume hermes-agent-openviking-data:/app/data \
+    --volume %S/state/openviking.conf:/app/ov.conf:z \
+    ${HERMES_AGENT_OPENVIKING_IMAGE}
+ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-openviking
+ExecStopPost=-/usr/bin/podman rm --force hermes-agent-openviking
+TimeoutStopSec=70
+
+[Install]
+WantedBy=default.target

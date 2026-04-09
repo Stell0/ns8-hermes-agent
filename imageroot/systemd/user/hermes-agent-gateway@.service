@@ -14,7 +14,17 @@ KillMode=none
 Type=notify
 NotifyAccess=all
 ExecStartPre=-/usr/bin/podman rm --force hermes-agent-gateway-%i
-ExecStart=/usr/bin/podman run --name hermes-agent-gateway-%i --replace --rm --pod hermes-agent-%i --sdnotify=conmon --cgroups=no-conmon --volume hermes-agent-hermes-data-%i:/opt/data --env-file %S/state/agent-%i.env --env-file %S/state/agent-%i_secrets.env ${HERMES_AGENT_GATEWAY_IMAGE}
+ExecStart=/usr/bin/podman run \
+    --name hermes-agent-gateway-%i \
+    --replace \
+    --rm \
+    --pod hermes-agent-%i \
+    --sdnotify=conmon \
+    --cgroups=no-conmon \
+    --volume hermes-agent-hermes-data-%i:/opt/data \
+    --env-file %S/state/agent-%i.env \
+    --env-file %S/state/agent-%i_secrets.env \
+    ${HERMES_AGENT_GATEWAY_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-gateway-%i
 ExecStopPost=-/usr/bin/podman rm --force hermes-agent-gateway-%i
 TimeoutStopSec=70

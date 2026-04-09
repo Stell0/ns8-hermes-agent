@@ -2,5 +2,3 @@ FROM ghcr.io/volcengine/openviking:latest
 LABEL org.opencontainers.image.title="hermes-agent-openviking"
 LABEL org.opencontainers.image.description="Thin wrapper around the upstream OpenViking runtime image"
 ENV OPENVIKING_WITH_BOT=0
-ENTRYPOINT ["/bin/sh", "-lc"]
-CMD ["exec openviking-server --without-bot"]

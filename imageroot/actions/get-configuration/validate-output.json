@@ -44,6 +44,21 @@
                             "start",
                             "stop"
                         ]
+                    },
+                    "account": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                    },
+                    "user": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
                     }
                 }
             }

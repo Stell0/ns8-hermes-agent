@@ -14,7 +14,17 @@ KillMode=none
 Type=notify
 NotifyAccess=all
 ExecStartPre=-/usr/bin/podman rm --force hermes-agent-hermes-%i
-ExecStart=/usr/bin/podman run --name hermes-agent-hermes-%i --replace --rm --pod hermes-agent-%i --sdnotify=conmon --cgroups=no-conmon --env-file %S/state/agent-%i.env --env-file %S/state/agent-%i_secrets.env ${HERMES_AGENT_HERMES_IMAGE}
+ExecStart=/usr/bin/podman run \
+    --name hermes-agent-hermes-%i \
+    --replace \
+    --rm \
+    --pod hermes-agent-%i \
+    --sdnotify=conmon \
+    --cgroups=no-conmon \
+    --volume hermes-agent-hermes-data-%i:/opt/data \
+    --env-file %S/state/agent-%i.env \
+    --env-file %S/state/agent-%i_secrets.env \
+    ${HERMES_AGENT_HERMES_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-hermes-%i
 ExecStopPost=-/usr/bin/podman rm --force hermes-agent-hermes-%i
 TimeoutStopSec=70
