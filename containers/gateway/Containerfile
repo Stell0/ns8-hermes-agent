@@ -1,4 +1,0 @@
-FROM docker.io/nousresearch/hermes-agent:latest
-LABEL org.opencontainers.image.title="hermes-agent-gateway"
-LABEL org.opencontainers.image.description="Thin wrapper around the upstream Hermes image for gateway mode"
-CMD ["gateway", "run"]

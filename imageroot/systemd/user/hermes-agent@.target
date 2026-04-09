@@ -1,7 +1,7 @@
 [Unit]
 Description=Hermes agent stack %i
-Wants=hermes-agent-openviking.service hermes-agent-pod@%i.service hermes-agent-hermes@%i.service hermes-agent-gateway@%i.service
-After=hermes-agent-openviking.service hermes-agent-pod@%i.service
+Wants=hermes-agent-openviking.service hermes-agent-hermes@%i.service
+After=hermes-agent-openviking.service
 StopWhenUnneeded=yes
 
 [Install]

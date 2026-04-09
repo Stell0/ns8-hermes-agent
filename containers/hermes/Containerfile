@@ -1,5 +1,4 @@
 FROM docker.io/nousresearch/hermes-agent:latest
 LABEL org.opencontainers.image.title="hermes-agent-hermes"
 LABEL org.opencontainers.image.description="Thin wrapper around the upstream Hermes runtime image"
-ENTRYPOINT ["/bin/sh", "-lc"]
-CMD ["trap 'exit 0' TERM INT; while :; do sleep 3600; done"]
+CMD ["gateway", "run"]

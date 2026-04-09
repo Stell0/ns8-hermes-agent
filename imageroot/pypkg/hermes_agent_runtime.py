@@ -272,8 +272,8 @@ def shared_openviking_configfile():
     return SHARED_OPENVIKING_CONFIGFILE
 
 
-def pod_name(agent_id):
-    return f"hermes-agent-{agent_id}"
+def hermes_container_name(agent_id):
+    return f"hermes-agent-hermes-{agent_id}"
 
 
 def hermes_data_volume(agent_id):
@@ -292,21 +292,15 @@ def target_unit(agent_id):
     return f"hermes-agent@{agent_id}.target"
 
 
-def pod_service_unit(agent_id):
-    return f"hermes-agent-pod@{agent_id}.service"
-
-
 def container_service_units(agent_id):
     return [
         f"hermes-agent-hermes@{agent_id}.service",
-        f"hermes-agent-gateway@{agent_id}.service",
     ]
 
 
 def managed_service_units(agent_id):
     return [
         shared_openviking_service_unit(),
-        pod_service_unit(agent_id),
         *container_service_units(agent_id),
     ]
 
@@ -812,7 +806,7 @@ def sync_agent_runtime_files(agent_id=None):
 
 def stop_disable_agent(agent_id):
     systemctl_user("disable", "--now", target_unit(agent_id), check=False)
-    run_command(["podman", "pod", "rm", "--force", pod_name(agent_id)], check=False)
+    run_command(["podman", "rm", "--force", hermes_container_name(agent_id)], check=False)
 
 
 def cleanup_agent_runtime(agent_id):

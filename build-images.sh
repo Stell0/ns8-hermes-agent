@@ -36,7 +36,6 @@ build_component_image() {
 
 component_images=(
     "${repobase}/hermes-agent-hermes:${imagetag}"
-    "${repobase}/hermes-agent-gateway:${imagetag}"
     "${repobase}/hermes-agent-openviking:${imagetag}"
 )
 
@@ -57,7 +56,6 @@ buildah run \
     sh -c "yarn install && yarn build"
 
 build_component_image "hermes-agent-hermes" "containers/hermes"
-build_component_image "hermes-agent-gateway" "containers/gateway"
 build_component_image "hermes-agent-openviking" "containers/openviking"
 
 # Add imageroot directory to the container image
