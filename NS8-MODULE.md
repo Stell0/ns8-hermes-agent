@@ -6,16 +6,18 @@ This document describes the current checked-in NS8 module implementation for
 ## Scope
 
 The current module is a rootless NS8 application scaffold that manages a stored
-roster of agents. Each configured agent can own one isolated Hermes runtime
-container managed by systemd user units, while one shared OpenViking runtime is
-reused across all agents inside the same module instance.
+roster of agents plus shared OpenViking embedding settings. Each configured
+user-facing agent can own one isolated Hermes runtime container managed by
+systemd user units, while one shared OpenViking runtime is reused across all
+agents inside the same module instance and one reserved always-on Hermes
+runtime is kept for the shared OpenViking backend.
 
 The current runtime includes:
 
 - `configure-module`, `get-configuration`, and `destroy-module`
 - smarthost discovery and one `smarthost-changed` event handler
 - generated per-agent env and secrets files plus one shared OpenViking config
-- user systemd units for one shared OpenViking service plus one Hermes runtime service per agent
+- user systemd units for one shared OpenViking service, one reserved Hermes backend service, and one Hermes runtime service per user-facing agent
 - two wrapper container images: Hermes and OpenViking
 - an embedded Vue 2 admin UI
 - a Robot Framework smoke test focused on the shared OpenViking plus per-agent runtime contract
@@ -121,7 +123,13 @@ Accepted payload shape:
       "role": "developer",
       "status": "start"
     }
-  ]
+  ],
+  "openviking": {
+    "embedding": {
+      "provider": "jina",
+      "api_key": "test-key"
+    }
+  }
 }
 ```
 
@@ -137,7 +145,7 @@ Steps:
 
 | Step | File | Purpose |
 |------|------|---------|
-| 20 | `20configure` | Validates the payload and persists `AGENTS_LIST` into `environment`. |
+| 20 | `20configure` | Validates the payload, persists `AGENTS_LIST` into `environment`, and stores the shared OpenViking embedding provider and secret. |
 | 80 | `80start_services` | Delegates lifecycle reconciliation to `start-agent-services`. |
 
 The persisted roster format is:
@@ -155,7 +163,7 @@ The stored `status` is the desired state. The runtime status returned later by
 
 | Step | File | Purpose |
 |------|------|---------|
-| 20 | `20read` | Parses `AGENTS_LIST` from `environment` and returns the roster with actual runtime status from systemd. |
+| 20 | `20read` | Parses `AGENTS_LIST` from `environment`, synthesizes the reserved backend agent, and returns the roster with actual runtime status from systemd plus shared OpenViking embedding state. |
 
 Example output:
 
@@ -163,13 +171,28 @@ Example output:
 {
   "agents": [
     {
+      "id": 0,
+      "name": "OpenViking Backend",
+      "role": "default",
+      "status": "start",
+      "account": "system",
+      "user": "system",
+      "agent_id": "openviking-backend",
+      "hidden": true,
+      "protected": true,
+      "system": true
+    },
+    {
       "id": 1,
       "name": "Foo Bar",
       "role": "developer",
       "status": "start",
       "account": "agent-1",
       "user": "agent-1",
-      "agent_id": "agent-1"
+      "agent_id": "agent-1",
+      "hidden": false,
+      "protected": false,
+      "system": false
     },
     {
       "id": 2,
@@ -178,14 +201,25 @@ Example output:
       "status": "stop",
       "account": "agent-2",
       "user": "agent-2",
-      "agent_id": "agent-2"
+      "agent_id": "agent-2",
+      "hidden": false,
+      "protected": false,
+      "system": false
     }
-  ]
+  ],
+  "openviking": {
+    "embedding": {
+      "provider": "jina",
+      "api_key_configured": true
+    }
+  }
 }
 ```
 
 `start` means the shared OpenViking service and that agent's Hermes service are
-active. Otherwise the action returns `stop`.
+active. Otherwise the action returns `stop`. The reserved backend agent is
+returned as a hidden, protected, system-owned entry so the UI can preserve it
+without exposing it for normal management.
 
 ### `destroy-module`
 
@@ -213,17 +247,17 @@ path from the older split Hermes plus gateway runtime is implemented here.
 The module runtime uses these state files:
 
 - `environment`: shared NS8 state; stores `AGENTS_LIST` and public smarthost
-  settings plus the internal shared OpenViking port
-- `secrets.env`: shared sensitive values such as `SMTP_PASSWORD` and the shared `OPENVIKING_ROOT_API_KEY`
+  settings plus the internal shared OpenViking port and reserved Hermes API publish port
+- `secrets.env`: shared sensitive values such as `SMTP_PASSWORD`, the shared `OPENVIKING_ROOT_API_KEY`, and the shared OpenViking embedding API key
 - `systemd.env`: generated controlled subset of environment values used only by
   systemd units
 - `agent-<id>.env`: per-agent public runtime env file, including local
   OpenViking client settings for Hermes (`OPENVIKING_ENDPOINT`,
   `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_AGENT_ID`)
 - `agent-<id>_secrets.env`: per-agent sensitive runtime env file, including a
-  preserved tenant-scoped `OPENVIKING_API_KEY`
+  preserved tenant-scoped `OPENVIKING_API_KEY`; `agent-0_secrets.env` also stores the reserved Hermes `API_SERVER_KEY`
 - `openviking.conf`: shared OpenViking server config bind-mounted into the shared
-  OpenViking container with the matching `server.root_api_key`
+  OpenViking container with the matching `server.root_api_key`, a fixed `vlm` block targeting the reserved Hermes backend, and an optional `embedding.dense` block from shared module settings
 
 Containers load only the per-agent env and secrets files. They do not load the
 shared `environment` or shared `secrets.env` directly. The shared OpenViking
@@ -250,9 +284,10 @@ This helper:
 This helper:
 
 - reads the stored agent roster
-- writes `systemd.env` from controlled image variables plus the internal OpenViking port
+- writes `systemd.env` from controlled image variables plus the internal OpenViking port and reserved Hermes API publish port
 - writes `agent-<id>.env`, `agent-<id>_secrets.env`, and `openviking.conf`
 - generates and preserves one shared `OPENVIKING_ROOT_API_KEY`
+- generates and preserves the reserved Hermes API server key used by shared OpenViking
 - removes stale per-agent runtime files for deleted agents
 
 ### `ensure-openviking-tenant`
@@ -275,7 +310,8 @@ This helper:
 - refreshes smarthost data
 - regenerates runtime env files
 - reloads the user systemd daemon
-- starts or stops the shared OpenViking service when needed
+- starts the shared OpenViking service whenever the reserved Hermes backend or any user agent requires it
+- starts the dedicated `hermes-agent-hermes-system.service` reserved backend
 - starts or stops `hermes-agent@<id>.target` based on the desired state
 - cleans stale runtime files, runtime containers, per-agent named volumes, and removed-agent OpenViking accounts
 
@@ -294,6 +330,8 @@ This module centralizes:
 
 - agent validation
 - `AGENTS_LIST` serialization and parsing
+- hidden reserved system-agent synthesis and metadata
+- shared OpenViking embedding settings validation and persistence
 - runtime-file generation
 - shared OpenViking config and tenant provisioning
 - per-agent named volume naming and cleanup
@@ -308,6 +346,7 @@ The checked-in unit templates under `imageroot/systemd/user/` are:
 - `hermes-agent@.target`: umbrella target for one agent stack
 - `hermes-agent-openviking.service`: runs the shared OpenViking container
 - `hermes-agent-hermes@.service`: runs the Hermes container in gateway mode
+- `hermes-agent-hermes-system.service`: runs the reserved always-on Hermes container for the shared OpenViking backend
 
 Starting `hermes-agent@1.target` ensures the shared OpenViking service is up,
 provisions the agent tenant if needed, and starts the per-agent Hermes runtime
@@ -323,6 +362,7 @@ The current persistent storage layout is:
 
 - `hermes-agent-hermes@.service` mounts the per-agent named volume
   `hermes-agent-hermes-data-%i` at `/opt/data`
+- `hermes-agent-hermes-system.service` mounts `hermes-agent-hermes-data-0` at `/opt/data` and publishes the Hermes API server only on `127.0.0.1:${HERMES_SYSTEM_API_PORT}` for module-internal use
 - `hermes-agent-openviking.service` mounts the shared named volume
   `hermes-agent-openviking-data` at `/app/data`
 - `hermes-agent-openviking.service` bind-mounts `%S/state/openviking.conf` at
@@ -349,9 +389,10 @@ The module includes a Vue 2 based NS8 admin UI under `ui/`.
 Current UI behavior relevant to the backend:
 
 - the `Settings` view reads data through `get-configuration`
-- the `Settings` view writes the full agent roster through `configure-module`
+- the `Settings` view writes the visible agent roster plus shared OpenViking embedding settings through `configure-module`
+- the `Settings` view filters the reserved system backend from the visible table and warns when the embedding provider changes after initial setup
 - the UI already models `start` and `stop` status per agent
-- the backend now persists desired status and returns actual runtime status
+- the backend now persists desired status and returns actual runtime status plus hidden, protected, and system flags for each returned agent
 
 ## Testing
 

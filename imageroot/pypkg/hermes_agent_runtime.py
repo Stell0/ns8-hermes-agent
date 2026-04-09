@@ -5,6 +5,7 @@ import secrets
 import socket
 import subprocess
 import time
+from typing import Any
 from pathlib import Path
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -23,9 +24,9 @@ ALLOWED_ROLES = {"default", "developer"}
 ALLOWED_STATUSES = {"start", "stop"}
 NAME_PATTERN = re.compile(r"^[A-Za-z ]+$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-AGENT_ENVFILE_PATTERN = re.compile(r"^agent-(\d+)\.env$")
-AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent-(\d+)_secrets\.env$")
-AGENT_OPENVIKING_CONFIG_PATTERN = re.compile(r"^agent-(\d+)_openviking\.conf$")
+AGENT_ENVFILE_PATTERN = re.compile(r"^agent-(-?\d+)\.env$")
+AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent-(-?\d+)_secrets\.env$")
+AGENT_OPENVIKING_CONFIG_PATTERN = re.compile(r"^agent-(-?\d+)_openviking\.conf$")
 SYSTEMD_TARGET_PATTERN = re.compile(r"^hermes-agent@(\d+)\.target$")
 OPENVIKING_CONFIG_PATH = "/app/ov.conf"
 OPENVIKING_WORKSPACE_PATH = "/app/data"
@@ -33,12 +34,66 @@ OPENVIKING_PORT_ENV = "OPENVIKING_PORT"
 OPENVIKING_ROOT_API_KEY_ENV = "OPENVIKING_ROOT_API_KEY"
 OPENVIKING_TENANT_MODE_ENV = "OPENVIKING_TENANT_MODE"
 OPENVIKING_AGENT_ID_ENV = "OPENVIKING_AGENT_ID"
+OPENVIKING_EMBEDDING_PROVIDER_ENV = "OPENVIKING_EMBEDDING_PROVIDER"
+OPENVIKING_EMBEDDING_API_KEY_ENV = "OPENVIKING_EMBEDDING_API_KEY"
 OPENVIKING_TENANT_MODE = "shared"
 OPENVIKING_LOCAL_HOST = "127.0.0.1"
 OPENVIKING_CONTAINER_HOST = "host.containers.internal"
 OPENVIKING_LISTEN_HOST = "0.0.0.0"
 OPENVIKING_CONTAINER_PORT = 1933
 OPENVIKING_HEALTH_TIMEOUT = 60
+SYSTEM_AGENT_ID = 0
+SYSTEM_AGENT_NAME = "OpenViking Backend"
+SYSTEM_AGENT_ROLE = "default"
+SYSTEM_AGENT_STATUS = "start"
+SYSTEM_AGENT_ACCOUNT = "system"
+SYSTEM_AGENT_USER = "system"
+SYSTEM_AGENT_OPENVIKING_AGENT_ID = "openviking-backend"
+SYSTEM_AGENT_SERVICE_UNIT = "hermes-agent-hermes-system.service"
+HERMES_API_SERVER_ENABLED_ENV = "API_SERVER_ENABLED"
+HERMES_API_SERVER_HOST_ENV = "API_SERVER_HOST"
+HERMES_API_SERVER_PORT_ENV = "API_SERVER_PORT"
+HERMES_API_SERVER_KEY_ENV = "API_SERVER_KEY"
+HERMES_GATEWAY_PORT_ENV = "HERMES_GATEWAY_PORT"
+HERMES_SYSTEM_API_PORT_ENV = "HERMES_SYSTEM_API_PORT"
+HERMES_API_SERVER_HOST = "0.0.0.0"
+HERMES_API_SERVER_PORT = 8642
+HERMES_API_MODEL_NAME = "hermes-agent"
+SUPPORTED_EMBEDDING_PROVIDERS = {
+    "gemini",
+    "jina",
+    "minimax",
+    "openai",
+    "volcengine",
+    "voyage",
+}
+EMBEDDING_PROVIDER_DEFAULTS = {
+    "gemini": {
+        "model": "text-embedding-004",
+        "dimension": 768,
+    },
+    "jina": {
+        "model": "jina-embeddings-v5-text-small",
+        "dimension": 1024,
+    },
+    "minimax": {
+        "model": "embo-01",
+        "dimension": 1536,
+    },
+    "openai": {
+        "model": "text-embedding-3-large",
+        "dimension": 3072,
+    },
+    "volcengine": {
+        "model": "doubao-embedding-vision-250615",
+        "dimension": 1024,
+        "input": "multimodal",
+    },
+    "voyage": {
+        "model": "voyage-3.5-lite",
+        "dimension": 1024,
+    },
+}
 SMTP_PUBLIC_KEYS = (
     "SMTP_ENABLED",
     "SMTP_HOST",
@@ -49,7 +104,185 @@ SMTP_PUBLIC_KEYS = (
 )
 SMTP_SECRET_KEYS = ("SMTP_PASSWORD",)
 AGENT_SECRET_KEYS = ("OPENVIKING_API_KEY",)
-SYSTEMD_ENV_KEYS = {OPENVIKING_PORT_ENV}
+SYSTEMD_ENV_KEYS = {OPENVIKING_PORT_ENV, HERMES_SYSTEM_API_PORT_ENV}
+RESERVED_OPENVIKING_IDENTIFIERS = {
+    "account": {SYSTEM_AGENT_ACCOUNT},
+    "user": {SYSTEM_AGENT_USER},
+    "agent_id": {SYSTEM_AGENT_OPENVIKING_AGENT_ID},
+}
+
+
+def is_system_agent_id(agent_id):
+    return int(agent_id) == SYSTEM_AGENT_ID
+
+
+def system_agent_data():
+    return {
+        "id": SYSTEM_AGENT_ID,
+        "name": SYSTEM_AGENT_NAME,
+        "role": SYSTEM_AGENT_ROLE,
+        "status": SYSTEM_AGENT_STATUS,
+        "account": SYSTEM_AGENT_ACCOUNT,
+        "user": SYSTEM_AGENT_USER,
+        "agent_id": SYSTEM_AGENT_OPENVIKING_AGENT_ID,
+        "hidden": True,
+        "protected": True,
+        "system": True,
+    }
+
+
+def attach_agent_metadata(agent_data):
+    if is_system_agent_id(agent_data["id"]):
+        return {
+            **agent_data,
+            "hidden": True,
+            "protected": True,
+            "system": True,
+        }
+
+    return {
+        **agent_data,
+        "hidden": False,
+        "protected": False,
+        "system": False,
+    }
+
+
+def managed_agents(user_agents):
+    return [system_agent_data(), *sorted(user_agents, key=lambda item: item["id"])]
+
+
+def read_managed_agents_from_state():
+    return managed_agents(read_agents_from_state())
+
+
+def get_agent_definition(agent_id):
+    for agent_data in read_managed_agents_from_state():
+        if agent_data["id"] == agent_id:
+            return agent_data
+
+    return None
+
+
+def valid_embedding_provider(value):
+    return isinstance(value, str) and value in SUPPORTED_EMBEDDING_PROVIDERS
+
+
+def embedding_defaults(provider):
+    return EMBEDDING_PROVIDER_DEFAULTS[provider].copy()
+
+
+def normalize_optional_string(value):
+    if value is None:
+        return None
+
+    if not isinstance(value, str):
+        raise ValueError("value must be a string")
+
+    normalized_value = value.strip()
+    return normalized_value or None
+
+
+def read_openviking_settings(shared_environment=None, shared_secrets=None):
+    shared_environment = shared_environment or read_optional_envfile(ENVIRONMENT_FILE)
+    shared_secrets = shared_secrets or read_optional_envfile(SHARED_SECRETS_ENVFILE)
+
+    provider = normalize_optional_string(shared_environment.get(OPENVIKING_EMBEDDING_PROVIDER_ENV))
+    if not valid_embedding_provider(provider):
+        provider = None
+
+    embedding_settings: dict[str, Any] = {
+        "api_key_configured": bool(shared_secrets.get(OPENVIKING_EMBEDDING_API_KEY_ENV)),
+    }
+    if provider:
+        embedding_settings["provider"] = provider
+
+    return {
+        "embedding": embedding_settings,
+    }
+
+
+def validate_openviking_settings(raw_openviking, existing_openviking=None):
+    if raw_openviking is None:
+        return read_openviking_settings()
+
+    if not isinstance(raw_openviking, dict):
+        raise ValueError("openviking must be an object")
+
+    raw_embedding = raw_openviking.get("embedding") or {}
+    if not isinstance(raw_embedding, dict):
+        raise ValueError("openviking embedding must be an object")
+
+    provider = normalize_optional_string(raw_embedding.get("provider"))
+    api_key = normalize_optional_string(raw_embedding.get("api_key"))
+    existing_openviking = existing_openviking or read_openviking_settings()
+    existing_embedding = existing_openviking.get("embedding", {})
+    existing_provider = existing_embedding.get("provider")
+
+    if provider is None:
+        return {
+            "embedding": {
+                "api_key": None,
+                "api_key_configured": False,
+            }
+        }
+
+    if not valid_embedding_provider(provider):
+        raise ValueError(f"unsupported embedding provider: {provider}")
+
+    if not api_key and (provider != existing_provider or not existing_embedding.get("api_key_configured")):
+        raise ValueError("embedding api_key is required")
+
+    return {
+        "embedding": {
+            "provider": provider,
+            "api_key": api_key,
+            "api_key_configured": bool(api_key or existing_embedding.get("api_key_configured")),
+        }
+    }
+
+
+def persist_openviking_settings(openviking_settings):
+    embedding_settings = openviking_settings.get("embedding", {})
+    provider = embedding_settings.get("provider") or ""
+    agent.set_env(OPENVIKING_EMBEDDING_PROVIDER_ENV, provider)
+
+    shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
+    updated_shared_secrets = {
+        key: value
+        for key, value in shared_secrets.items()
+        if key != OPENVIKING_EMBEDDING_API_KEY_ENV
+    }
+    api_key = embedding_settings.get("api_key")
+    if api_key:
+        updated_shared_secrets[OPENVIKING_EMBEDDING_API_KEY_ENV] = api_key
+
+    write_envfile(SHARED_SECRETS_ENVFILE, updated_shared_secrets)
+
+
+def configure_module(request_payload):
+    user_agents = validate_agents(request_payload.get("agents", []))
+    openviking_settings = None
+    if "openviking" in request_payload:
+        existing_openviking = read_openviking_settings()
+        openviking_settings = validate_openviking_settings(request_payload.get("openviking"), existing_openviking)
+
+    persist_agents(user_agents)
+    if openviking_settings is not None:
+        persist_openviking_settings(openviking_settings)
+
+
+def get_configuration():
+    return {
+        "agents": [
+            {
+                **attach_agent_metadata(agent_data),
+                "status": actual_agent_status(agent_data["id"]),
+            }
+            for agent_data in read_managed_agents_from_state()
+        ],
+        "openviking": read_openviking_settings(),
+    }
 
 
 def default_openviking_account(agent_id):
@@ -88,6 +321,8 @@ def validate_agents(raw_agents):
     normalized_agents = []
     seen_ids = set()
     seen_accounts = set()
+    seen_users = set()
+    seen_agent_ids = set()
 
     for index, raw_agent in enumerate(raw_agents):
         if not isinstance(raw_agent, dict):
@@ -121,17 +356,28 @@ def validate_agents(raw_agents):
         )
         if account in seen_accounts:
             raise ValueError(f"agent account {account} is duplicated")
+        if account in RESERVED_OPENVIKING_IDENTIFIERS["account"]:
+            raise ValueError(f"agent account {account} is reserved")
 
         user = normalize_identifier(
             raw_agent.get("user"),
             default_openviking_user(agent_id),
             f"agent at index {index} has an invalid user",
         )
+        if user in seen_users:
+            raise ValueError(f"agent user {user} is duplicated")
+        if user in RESERVED_OPENVIKING_IDENTIFIERS["user"]:
+            raise ValueError(f"agent user {user} is reserved")
+
         openviking_agent_id = normalize_identifier(
             raw_agent.get("agent_id"),
             default_openviking_agent_id(agent_id),
             f"agent at index {index} has an invalid agent_id",
         )
+        if openviking_agent_id in seen_agent_ids:
+            raise ValueError(f"agent agent_id {openviking_agent_id} is duplicated")
+        if openviking_agent_id in RESERVED_OPENVIKING_IDENTIFIERS["agent_id"]:
+            raise ValueError(f"agent agent_id {openviking_agent_id} is reserved")
 
         normalized_agents.append(
             {
@@ -146,6 +392,8 @@ def validate_agents(raw_agents):
         )
         seen_ids.add(agent_id)
         seen_accounts.add(account)
+        seen_users.add(user)
+        seen_agent_ids.add(openviking_agent_id)
 
     return sorted(normalized_agents, key=lambda item: item["id"])
 
@@ -397,7 +645,9 @@ def write_envfile(path, env_data):
 
 
 def write_jsonfile(path, data):
-    Path(path).write_text(f"{json.dumps(data, indent=2)}\n", encoding="utf-8")
+    file_path = Path(path)
+    file_path.write_text(f"{json.dumps(data, indent=2)}\n", encoding="utf-8")
+    os.chmod(file_path, 0o600)
 
 
 def valid_port_value(value):
@@ -417,13 +667,19 @@ def ensure_shared_openviking_settings(shared_environment, shared_secrets):
         agent.set_env(OPENVIKING_PORT_ENV, port_value)
         shared_environment[OPENVIKING_PORT_ENV] = port_value
 
+    system_api_port = shared_environment.get(HERMES_SYSTEM_API_PORT_ENV)
+    if not valid_port_value(system_api_port):
+        system_api_port = str(reserve_tcp_port())
+        agent.set_env(HERMES_SYSTEM_API_PORT_ENV, system_api_port)
+        shared_environment[HERMES_SYSTEM_API_PORT_ENV] = system_api_port
+
     root_api_key = shared_secrets.get(OPENVIKING_ROOT_API_KEY_ENV)
     if not root_api_key:
         root_api_key = generate_agent_secret(OPENVIKING_ROOT_API_KEY_ENV)
         shared_secrets = {**shared_secrets, OPENVIKING_ROOT_API_KEY_ENV: root_api_key}
         write_envfile(SHARED_SECRETS_ENVFILE, shared_secrets)
 
-    return int(port_value), root_api_key
+    return int(port_value), root_api_key, int(system_api_port)
 
 
 def openviking_port(shared_environment):
@@ -440,6 +696,18 @@ def openviking_host_endpoint(shared_environment):
 
 def openviking_container_endpoint(shared_environment):
     return f"http://{OPENVIKING_CONTAINER_HOST}:{openviking_port(shared_environment)}"
+
+
+def hermes_system_api_port(shared_environment):
+    port_value = shared_environment.get(HERMES_SYSTEM_API_PORT_ENV)
+    if not valid_port_value(port_value):
+        raise ValueError(f"invalid {HERMES_SYSTEM_API_PORT_ENV}: {port_value}")
+
+    return int(port_value)
+
+
+def hermes_system_api_base(shared_environment):
+    return f"http://{OPENVIKING_CONTAINER_HOST}:{hermes_system_api_port(shared_environment)}/v1"
 
 
 def build_agent_public_env(agent_data, shared_environment):
@@ -465,6 +733,16 @@ def build_agent_public_env(agent_data, shared_environment):
         if value is not None:
             env_data[key] = value
 
+    if is_system_agent_id(agent_data["id"]):
+        env_data.update(
+            {
+                HERMES_GATEWAY_PORT_ENV: str(HERMES_API_SERVER_PORT),
+                HERMES_API_SERVER_ENABLED_ENV: "true",
+                HERMES_API_SERVER_HOST_ENV: HERMES_API_SERVER_HOST,
+                HERMES_API_SERVER_PORT_ENV: str(HERMES_API_SERVER_PORT),
+            }
+        )
+
     return env_data
 
 
@@ -488,6 +766,7 @@ def generate_agent_secret(_key):
 
 def build_agent_secrets_env(
     shared_secrets,
+    agent_data=None,
     existing_agent_secrets=None,
     preserve_openviking_api_key=False,
 ):
@@ -503,6 +782,10 @@ def build_agent_secrets_env(
             if (value := shared_secrets.get(key)) is not None
         }
     )
+    if agent_data and is_system_agent_id(agent_data["id"]):
+        env_data[HERMES_API_SERVER_KEY_ENV] = existing_agent_secrets.get(HERMES_API_SERVER_KEY_ENV) or generate_agent_secret(
+            HERMES_API_SERVER_KEY_ENV
+        )
     return env_data
 
 
@@ -514,8 +797,29 @@ def build_systemd_environment(shared_environment):
     }
 
 
-def build_openviking_config(shared_secrets):
+def build_openviking_embedding_config(shared_environment, shared_secrets):
+    provider = normalize_optional_string(shared_environment.get(OPENVIKING_EMBEDDING_PROVIDER_ENV))
+    if not valid_embedding_provider(provider):
+        return None
+
+    api_key = shared_secrets.get(OPENVIKING_EMBEDDING_API_KEY_ENV)
+    if not api_key:
+        return None
+
+    dense_config = {
+        "provider": provider,
+        "api_key": api_key,
+        **embedding_defaults(provider),
+    }
     return {
+        "max_concurrent": 10,
+        "max_retries": 3,
+        "dense": dense_config,
+    }
+
+
+def build_openviking_config(shared_environment, shared_secrets, system_agent_secrets):
+    config = {
         "server": {
             "host": OPENVIKING_LISTEN_HOST,
             "port": OPENVIKING_CONTAINER_PORT,
@@ -535,7 +839,21 @@ def build_openviking_config(shared_secrets):
             "level": "INFO",
             "output": "stdout",
         },
+        "vlm": {
+            "provider": "openai",
+            "api_base": hermes_system_api_base(shared_environment),
+            "api_key": system_agent_secrets[HERMES_API_SERVER_KEY_ENV],
+            "model": HERMES_API_MODEL_NAME,
+            "max_retries": 2,
+        },
     }
+
+    embedding_config = build_openviking_embedding_config(shared_environment, shared_secrets)
+    if embedding_config:
+        config["embedding"] = embedding_config
+        config["storage"]["vectordb"]["dimension"] = embedding_config["dense"]["dimension"]
+
+    return config
 
 
 def parse_json_bytes(payload):
@@ -668,16 +986,13 @@ def provision_openviking_tenant(port, root_api_key, agent_data):
 
 
 def ensure_agent_openviking_tenant(agent_id):
-    agent_data = next(
-        (item for item in read_agents_from_state() if item["id"] == agent_id),
-        None,
-    )
+    agent_data = get_agent_definition(agent_id)
     if agent_data is None:
         raise ValueError(f"agent {agent_id} not found")
 
     shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
     shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
-    port, root_api_key = ensure_shared_openviking_settings(shared_environment, shared_secrets)
+    port, root_api_key, _ = ensure_shared_openviking_settings(shared_environment, shared_secrets)
     wait_for_openviking(port)
 
     shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
@@ -688,6 +1003,7 @@ def ensure_agent_openviking_tenant(agent_id):
             agent_secrets_envfile(agent_id),
             build_agent_secrets_env(
                 shared_secrets,
+                agent_data=agent_data,
                 existing_agent_secrets=agent_secrets,
                 preserve_openviking_api_key=True,
             ),
@@ -695,7 +1011,7 @@ def ensure_agent_openviking_tenant(agent_id):
         return existing_user_key
 
     user_key = provision_openviking_tenant(port, root_api_key, agent_data)
-    updated_agent_secrets = build_agent_secrets_env(shared_secrets)
+    updated_agent_secrets = build_agent_secrets_env(shared_secrets, agent_data=agent_data, existing_agent_secrets=agent_secrets)
     updated_agent_secrets["OPENVIKING_API_KEY"] = user_key
     write_envfile(agent_secrets_envfile(agent_id), updated_agent_secrets)
     return user_key
@@ -717,11 +1033,13 @@ def remove_agent_openviking_account(agent_id):
     if not root_api_key or not valid_port_value(port_value):
         return
 
-    wait_for_openviking(int(port_value))
+    assert port_value is not None
+    port = int(port_value)
+    wait_for_openviking(port)
     status_code, _ = openviking_request(
         "DELETE",
         f"/api/v1/admin/accounts/{urllib_parse.quote(account_id)}",
-        int(port_value),
+        port,
         api_key=root_api_key,
     )
     if response_is_success(status_code) or status_code == 404:
@@ -757,7 +1075,7 @@ def cleanup_shared_openviking_runtime():
 
 
 def sync_agent_runtime_files(agent_id=None):
-    agents = read_agents_from_state()
+    agents = read_managed_agents_from_state()
     shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
     shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
 
@@ -766,7 +1084,6 @@ def sync_agent_runtime_files(agent_id=None):
     shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
 
     write_envfile(SYSTEMD_ENVFILE, build_systemd_environment(shared_environment))
-    write_jsonfile(shared_openviking_configfile(), build_openviking_config(shared_secrets))
 
     if agent_id is not None:
         filtered_agents = [item for item in agents if item["id"] == agent_id]
@@ -774,13 +1091,15 @@ def sync_agent_runtime_files(agent_id=None):
             raise ValueError(f"agent {agent_id} not found")
         agents = filtered_agents
 
-    current_ids = {item["id"] for item in read_agents_from_state()}
+    current_ids = {item["id"] for item in read_managed_agents_from_state()}
+    generated_agent_secrets = {}
 
     for agent_data in agents:
         existing_agent_env = read_optional_envfile(agent_envfile(agent_data["id"]))
         existing_agent_secrets = read_optional_envfile(agent_secrets_envfile(agent_data["id"]))
         agent_secrets = build_agent_secrets_env(
             shared_secrets,
+            agent_data=agent_data,
             existing_agent_secrets=existing_agent_secrets,
             preserve_openviking_api_key=can_preserve_agent_api_key(existing_agent_env, agent_data),
         )
@@ -792,14 +1111,18 @@ def sync_agent_runtime_files(agent_id=None):
             agent_secrets_envfile(agent_data["id"]),
             agent_secrets,
         )
+        generated_agent_secrets[agent_data["id"]] = agent_secrets
         legacy_configfile = agent_openviking_configfile(agent_data["id"])
         if os.path.exists(legacy_configfile):
             os.remove(legacy_configfile)
 
-    if agent_id is None:
-        for stale_id in scan_generated_agent_ids():
-            if stale_id not in current_ids:
-                remove_agent_runtime_files(stale_id)
+    system_agent_secrets = generated_agent_secrets.get(SYSTEM_AGENT_ID) or read_optional_envfile(
+        agent_secrets_envfile(SYSTEM_AGENT_ID)
+    )
+    write_jsonfile(
+        shared_openviking_configfile(),
+        build_openviking_config(shared_environment, shared_secrets, system_agent_secrets),
+    )
 
     return agents
 
@@ -810,6 +1133,14 @@ def stop_disable_agent(agent_id):
 
 
 def cleanup_agent_runtime(agent_id):
+    if is_system_agent_id(agent_id):
+        systemctl_user("disable", "--now", SYSTEM_AGENT_SERVICE_UNIT, check=False)
+        run_command(["podman", "rm", "--force", hermes_container_name(agent_id)], check=False)
+        remove_agent_openviking_account(agent_id)
+        remove_agent_volumes(agent_id)
+        remove_agent_runtime_files(agent_id)
+        return
+
     stop_disable_agent(agent_id)
     remove_agent_openviking_account(agent_id)
     remove_agent_volumes(agent_id)
@@ -817,6 +1148,14 @@ def cleanup_agent_runtime(agent_id):
 
 
 def actual_agent_status(agent_id):
+    if is_system_agent_id(agent_id):
+        if all(
+            unit_is_active(unit_name)
+            for unit_name in (shared_openviking_service_unit(), SYSTEM_AGENT_SERVICE_UNIT)
+        ):
+            return "start"
+        return "stop"
+
     services = managed_service_units(agent_id)
     if all(unit_is_active(unit_name) for unit_name in services):
         return "start"

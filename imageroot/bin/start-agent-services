@@ -12,11 +12,13 @@ from hermes_agent_runtime import (
     LEGACY_AGENTS_ENVFILE,
     LEGACY_SMARTHOST_ENVFILE,
     SHARED_SECRETS_ENVFILE,
+    SYSTEM_AGENT_SERVICE_UNIT,
     agent_envfile,
     cleanup_agent_runtime,
     list_known_agent_ids,
     read_optional_envfile,
     read_agents_from_state,
+    read_managed_agents_from_state,
     shared_openviking_service_unit,
     sync_agent_runtime_files,
     target_unit,
@@ -57,15 +59,22 @@ def restart_agent(agent_id):
     run(["systemctl", "--user", "start", target_unit(agent_id)])
 
 
+def restart_system_agent():
+    run(["systemctl", "--user", "enable", SYSTEM_AGENT_SERVICE_UNIT])
+    run(["systemctl", "--user", "stop", SYSTEM_AGENT_SERVICE_UNIT], check=False)
+    run(["systemctl", "--user", "start", SYSTEM_AGENT_SERVICE_UNIT])
+
+
 known_agent_ids = set(list_known_agent_ids())
 run(["touch", SHARED_SECRETS_ENVFILE])
 run(["rm", "-f", LEGACY_SMARTHOST_ENVFILE, LEGACY_AGENTS_ENVFILE])
 run(["systemctl", "--user", "daemon-reload"])
 run(["runagent", "discover-smarthost"])
 current_agents = read_agents_from_state()
-current_ids = {agent_data["id"] for agent_data in current_agents}
+managed_agents = read_managed_agents_from_state()
+current_ids = {agent_data["id"] for agent_data in managed_agents}
 sync_agent_runtime_files()
-started_agents = [agent_data for agent_data in current_agents if agent_data["status"] == "start"]
+started_agents = [agent_data for agent_data in managed_agents if agent_data["status"] == "start"]
 shared_cleanup_ids = {
     agent_id
     for agent_id in known_agent_ids | current_ids
@@ -78,13 +87,12 @@ if started_agents or shared_cleanup_ids:
 for stale_agent_id in sorted(known_agent_ids - current_ids):
     cleanup_agent(stale_agent_id)
 
+restart_system_agent()
+
 for agent_data in current_agents:
     if agent_data["status"] == "start":
         restart_agent(agent_data["id"])
     else:
         cleanup_agent(agent_data["id"])
-
-if not started_agents:
-    stop_shared_openviking()
 
 sys.exit(0)

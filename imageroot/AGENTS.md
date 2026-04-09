@@ -1,7 +1,7 @@
 # imageroot Guidelines
 
 - This subtree is the installed NS8 module payload. Keep it aligned to the checked-in one-runtime-container-per-agent implementation, not to older split-container or broader aspirational manager designs.
-- The implemented runtime here includes `configure-module`, `get-configuration`, `destroy-module`, smarthost discovery, generated per-agent env and secrets files, one shared OpenViking config file, one event handler, a shared Python runtime helper, and user systemd units for one shared OpenViking service plus one Hermes runtime container per agent.
+- The implemented runtime here includes `configure-module`, `get-configuration`, `destroy-module`, smarthost discovery, generated per-agent env and secrets files, one shared OpenViking config file, one event handler, a shared Python runtime helper, and user systemd units for one shared OpenViking service, one reserved Hermes backend service, and one Hermes runtime container per user-facing agent.
 - Treat route, service, and restart wiring as one change set. If you change route path, service name, container port, env-file usage, or reload behavior, update the corresponding action scripts, event handlers, unit files, and tests or docs together.
 - Follow the NS8 conventions already present here: numbered executable action and event steps, JSON stdin and stdout for Python actions, and schema files beside actions when payloads are defined.
 - Keep shell helpers thin and explicit. Put behavior in action logic and documented module rules, not in opaque shell branching.

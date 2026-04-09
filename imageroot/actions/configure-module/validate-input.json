@@ -59,6 +59,33 @@
                     }
                 }
             }
+        },
+        "openviking": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "embedding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "provider": {
+                            "type": "string",
+                            "enum": [
+                                "gemini",
+                                "jina",
+                                "minimax",
+                                "openai",
+                                "volcengine",
+                                "voyage"
+                            ]
+                        },
+                        "api_key": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    }
+                }
+            }
         }
     }
 }

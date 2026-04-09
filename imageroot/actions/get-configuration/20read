@@ -17,14 +17,6 @@ runtime_module = importlib.util.module_from_spec(runtime_spec)
 runtime_spec.loader.exec_module(runtime_module)
 
 
-config = {
-    "agents": [
-        {
-            **agent_data,
-            "status": runtime_module.actual_agent_status(agent_data["id"]),
-        }
-        for agent_data in runtime_module.read_agents_from_state()
-    ],
-}
+config = runtime_module.get_configuration()
 
 json.dump(config, fp=sys.stdout)

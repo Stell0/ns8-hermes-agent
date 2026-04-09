@@ -33,24 +33,24 @@ Hermes manager components that are not yet present in the tree.
 
 ### `imageroot/actions/`
 
-- `configure-module/20configure`: validates the `agents` payload and persists `AGENTS_LIST` with desired status into `environment`.
+- `configure-module/20configure`: validates the user-facing `agents` payload plus shared `openviking` settings, persists `AGENTS_LIST`, and stores the shared embedding provider and secret.
 - `configure-module/80start_services`: shell wrapper that delegates per-agent runtime reconciliation to `start-agent-services`.
 - `configure-module/validate-input.json`: input schema for `configure-module`, including agent validation.
-- `get-configuration/20read`: parses `AGENTS_LIST` from `environment` and returns the current agents with persisted tenant metadata and actual systemd-backed status.
-- `get-configuration/validate-output.json`: output schema for the structured `agents` response.
+- `get-configuration/20read`: parses `AGENTS_LIST` from `environment`, synthesizes the hidden reserved system agent, and returns the current agents plus shared OpenViking embedding state.
+- `get-configuration/validate-output.json`: output schema for the structured `agents` and shared `openviking` response.
 - `destroy-module/20destroy`: stops and cleans all per-agent units, runtime containers, named volumes, generated runtime files, and the shared OpenViking runtime.
 
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings, merges public values into `environment`, and writes `SMTP_PASSWORD` to `secrets.env`.
-- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generating and preserving one shared OpenViking root key plus per-agent tenant metadata.
+- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generating and preserving one shared OpenViking root key, one reserved Hermes API key for the hidden system backend, and per-agent tenant metadata.
 - `ensure-openviking-tenant`: waits for the shared OpenViking service, provisions the per-agent account and user if needed, and writes the tenant API key to `agent-<id>_secrets.env`.
-- `start-agent-services`: reconciles the shared OpenViking service plus per-agent systemd targets and runtime containers after `configure-module`.
+- `start-agent-services`: reconciles the shared OpenViking service, the dedicated system Hermes backend service, and per-agent systemd targets after `configure-module`.
 - `reload-agent-services`: refreshes active agent targets after smarthost changes.
 
 ### `imageroot/pypkg/`
 
-- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, runtime-file generation, shared OpenViking provisioning, per-agent volume naming and cleanup, and systemd status checks.
+- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, hidden system-agent synthesis, shared embedding settings, runtime-file generation, shared OpenViking provisioning, per-agent volume naming and cleanup, and systemd status checks.
 
 ### `imageroot/events/`
 
@@ -61,6 +61,7 @@ Hermes manager components that are not yet present in the tree.
 - `hermes-agent@.target`: per-agent umbrella target.
 - `hermes-agent-openviking.service`: runs the shared OpenViking container with one shared named data volume and one generated `ov.conf` bind mount.
 - `hermes-agent-hermes@.service`: runs the Hermes runtime container in gateway mode with the per-agent Hermes state volume mounted at `/opt/data`.
+- `hermes-agent-hermes-system.service`: runs the reserved always-on Hermes runtime that exposes the module-local API server consumed by shared OpenViking.
 
 ## `containers/`
 
@@ -85,7 +86,7 @@ The embedded admin UI currently uses Vue 2 and Vue CLI.
 - `src/router/index.js`: router with `status`, `settings`, and `about` views.
 - `src/store/index.js`: Vuex store for embedded module context.
 - `src/views/`: page scaffolds for status, settings, and about.
-- `src/views/Settings.vue`: agent-management settings view with table actions, modal creation, and `configure-module` integration.
+- `src/views/Settings.vue`: shared OpenViking embedding settings plus agent-management settings view with table actions, modal creation, hidden system-agent filtering, warning UX, and `configure-module` integration.
 - `src/components/`: side menu components.
 - `src/i18n/index.js`: runtime language loading.
 - `src/styles/`: shared Carbon utility styles.
@@ -94,5 +95,5 @@ The embedded admin UI currently uses Vue 2 and Vue CLI.
 ## `tests/`
 
 - `__init__.robot`: Robot Framework initialization file.
-- `kickstart.robot`: install, configure, shared OpenViking, hidden tenant metadata, single-runtime-container lifecycle, tenant-isolation, persistent-volume, cleanup, and remove test flow.
+- `kickstart.robot`: install, configure, shared OpenViking, reserved backend runtime, embedding configuration, hidden tenant metadata, lifecycle, tenant-isolation, persistent-volume, cleanup, and remove test flow.
 - `pythonreq.txt`: Python dependencies used by the test runner.

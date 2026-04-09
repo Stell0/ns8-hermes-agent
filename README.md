@@ -10,6 +10,7 @@ Older docs in this repository may still describe a larger Hermes manager archite
 - custom actions: `configure-module`, `get-configuration`, and `destroy-module`
 - `configure-module` validates an `agents` payload, stores `AGENTS_LIST` in `environment`, synchronizes shared and per-agent runtime files, and reconciles per-agent systemd targets
 - the module now runs one shared rootless OpenViking container per module instance, while each started agent gets one rootless Hermes runtime container in gateway mode managed by its own systemd target
+- the module also keeps one reserved always-on Hermes runtime for the shared OpenViking backend; it is backend-managed, hidden from the UI, and not removable through normal agent operations
 - each started agent gets one internal named Podman volume mounted at Hermes `/opt/data`, and the module also keeps one shared OpenViking named volume mounted at `/app/data` for the shared multi-tenant OpenViking server
 - those named volumes are internal to the module for now; the image does not yet declare `org.nethserver.volumes` for NS8 disk-placement integration
 - `get-configuration` returns the configured agents parsed from `AGENTS_LIST` and reports actual runtime status from systemd
@@ -83,7 +84,12 @@ path from the older split Hermes plus gateway runtime is shipped in this tree.
 Let's assume that the hermes-agent instance is named `hermes-agent1`.
 
 The current settings UI and `configure-module` action manage an array of
-agents. Each agent contains:
+user-facing agents plus one shared OpenViking embedding configuration. The
+reserved system Hermes backend is returned by `get-configuration` with hidden
+protected, and system flags, but it is filtered out of the visible UI and
+cannot be deleted through normal saves.
+
+Each user-facing agent contains:
 
 - `id`: integer starting from `1`
 - `name`: user-defined string with allowed characters `[A-Za-z ]`
@@ -100,18 +106,33 @@ The persisted runtime value is stored in `environment` as:
 
 Example:
 
-    api-cli run module/hermes-agent1/configure-module --data '{"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}]}'
+    api-cli run module/hermes-agent1/configure-module --data '{"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}],"openviking":{"embedding":{"provider":"jina","api_key":"test-key"}}}'
 
 The above command will:
 - validate and store the agent roster in `environment`
+- persist the shared OpenViking embedding provider in `environment` and its API key in `secrets.env`
 - synchronize `systemd.env`, one shared `openviking.conf`, and per-agent `agent-<id>.env` and `agent-<id>_secrets.env` runtime files
+- synchronize the reserved system Hermes runtime files `agent-0.env` and `agent-0_secrets.env`
 - remove per-agent runtime files for stopped or deleted agents
 - generate and preserve one shared `OPENVIKING_ROOT_API_KEY` in `secrets.env`
+- generate and preserve one reserved Hermes API server key for the hidden system backend in `agent-0_secrets.env`
 - provision one OpenViking account and admin user per started agent and store that tenant user key as `OPENVIKING_API_KEY` in `agent-<id>_secrets.env`
+- provision the reserved system Hermes tenant so the always-on backend can use the shared OpenViking instance too
 - generate `systemd.env` with only the controlled image variables needed by systemd units, including the internal shared OpenViking host port
 - start or stop the matching `hermes-agent@<id>.target` instances based on the saved status
+- keep `hermes-agent-hermes-system.service` running as the dedicated OpenViking VLM backend
 - create or clean the matching per-agent Hermes named volumes as containers are started or removed
 - keep the shared OpenViking volume and shared server runtime outside the per-agent targets
+
+The generated shared `openviking.conf` now contains:
+
+- a fixed `vlm` block that points to the reserved Hermes API server over the module-internal loopback publish path
+- an optional `embedding.dense` block generated from the saved embedding provider and API key
+
+Changing the embedding service later is allowed at configuration level, but it
+does not migrate existing vectors inside the shared OpenViking workspace. If you
+switch providers later, clear or rebuild the shared indexed data to avoid
+dimension mismatches or mixed embedding spaces.
 
 Read the current configuration with:
 
@@ -119,23 +140,26 @@ Read the current configuration with:
 
 Example output:
 
-    {"agents": [{"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "account": "agent-1", "user": "agent-1", "agent_id": "agent-1"}]}
+    {"agents": [{"id": 0, "name": "OpenViking Backend", "role": "default", "status": "start", "account": "system", "user": "system", "agent_id": "openviking-backend", "hidden": true, "protected": true, "system": true}, {"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "account": "agent-1", "user": "agent-1", "agent_id": "agent-1", "hidden": false, "protected": false, "system": false}], "openviking": {"embedding": {"provider": "jina", "api_key_configured": true}}}
 
 `status` is returned from the actual systemd-backed runtime state, not only from
 the desired configuration.
 
 Started agents enable a templated user target named `hermes-agent@<id>.target`.
 That target brings up one per-agent Hermes runtime service in gateway mode,
-while all started agents share one OpenViking service:
+while all agents share one OpenViking service and the reserved system backend
+uses its own dedicated service:
 
 - `hermes-agent-openviking.service`
 - `hermes-agent-hermes@<id>.service`
+- `hermes-agent-hermes-system.service`
 
 The persistent storage contract is currently:
 
 - `hermes-agent-hermes@<id>.service` mounts `hermes-agent-hermes-data-<id>` at `/opt/data`
 - `hermes-agent-openviking.service` mounts the shared volume `hermes-agent-openviking-data` at `/app/data`
 - `hermes-agent-openviking.service` bind-mounts the generated shared `openviking.conf` to `/app/ov.conf`
+- `hermes-agent-hermes-system.service` mounts `hermes-agent-hermes-data-0` at `/opt/data` and publishes the Hermes API server only on module-local loopback for OpenViking
 
 The Hermes wrapper keeps the upstream Hermes Docker entrypoint and now defaults
 directly to `gateway run`, so first start still bootstraps `/opt/data` with
@@ -153,8 +177,11 @@ the agent-specific runtime data into `agent-<id>.env` and
 `systemd.env`. The generated per-agent files include the shared OpenViking
 endpoint plus tenant-scoped `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and
 `OPENVIKING_AGENT_ID` values in `agent-<id>.env`, and the matching tenant
-`OPENVIKING_API_KEY` in `agent-<id>_secrets.env`. The shared `secrets.env`
-keeps `OPENVIKING_ROOT_API_KEY` for the shared server alongside `SMTP_PASSWORD`.
+`OPENVIKING_API_KEY` in `agent-<id>_secrets.env`. The reserved system backend
+also gets `API_SERVER_ENABLED`, `API_SERVER_HOST`, `API_SERVER_PORT`, and a
+generated `API_SERVER_KEY` so OpenViking can use it as an OpenAI-compatible
+backend. The shared `secrets.env` keeps `OPENVIKING_ROOT_API_KEY`, the shared
+embedding API key, and `SMTP_PASSWORD`.
 The event handler
 `imageroot/events/smarthost-changed/10reload_services` refreshes active agent
 targets when cluster smarthost settings change.
@@ -185,7 +212,8 @@ currently validates shared OpenViking runtime generation, actual runtime status
 from `get-configuration`, per-agent target plus runtime container state,
 tenant account isolation through the shared OpenViking admin API, named volume
 creation, persistence across target restart, stopped-agent runtime cleanup,
-reconfiguration cleanup, and module removal.
+reconfiguration cleanup, hidden system-backend behavior, shared embedding
+configuration, and module removal.
 
 ## UI translation
 
