@@ -1,8 +1,7 @@
 [Unit]
 Description=Hermes runtime container %i
-Requires=hermes-agent-pod@%i.service
-After=hermes-agent-pod@%i.service
-BindsTo=hermes-agent-pod@%i.service
+Requires=hermes-agent-openviking.service
+After=hermes-agent-openviking.service
 PartOf=hermes-agent@%i.target
 
 [Service]
@@ -13,12 +12,14 @@ Restart=always
 KillMode=none
 Type=notify
 NotifyAccess=all
+ExecStartPre=/usr/local/bin/runagent discover-smarthost
+ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id %i
+ExecStartPre=/usr/local/bin/runagent ensure-openviking-tenant --agent-id %i
 ExecStartPre=-/usr/bin/podman rm --force hermes-agent-hermes-%i
 ExecStart=/usr/bin/podman run \
     --name hermes-agent-hermes-%i \
     --replace \
     --rm \
-    --pod hermes-agent-%i \
     --sdnotify=conmon \
     --cgroups=no-conmon \
     --volume hermes-agent-hermes-data-%i:/opt/data \

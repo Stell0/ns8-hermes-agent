@@ -6,10 +6,10 @@ Older docs in this repository may still describe a larger Hermes manager archite
 
 ## Current code state
 
-- module image built by `build-images.sh` and labeled with three dependent wrapper images under `containers/`
+- module image built by `build-images.sh` and labeled with two dependent wrapper images under `containers/`
 - custom actions: `configure-module`, `get-configuration`, and `destroy-module`
-- `configure-module` validates an `agents` payload, stores `AGENTS_LIST` in `environment`, generates per-agent env and secrets files plus one shared OpenViking server config, and reconciles per-agent systemd targets
-- the module now runs one shared rootless OpenViking container per module instance, while each started agent still gets its own rootless Podman pod for the Hermes runtime and gateway containers
+- `configure-module` validates an `agents` payload, stores `AGENTS_LIST` in `environment`, synchronizes shared and per-agent runtime files, and reconciles per-agent systemd targets
+- the module now runs one shared rootless OpenViking container per module instance, while each started agent gets one rootless Hermes runtime container in gateway mode managed by its own systemd target
 - each started agent gets one internal named Podman volume mounted at Hermes `/opt/data`, and the module also keeps one shared OpenViking named volume mounted at `/app/data` for the shared multi-tenant OpenViking server
 - those named volumes are internal to the module for now; the image does not yet declare `org.nethserver.volumes` for NS8 disk-placement integration
 - `get-configuration` returns the configured agents parsed from `AGENTS_LIST` and reports actual runtime status from systemd
@@ -22,7 +22,7 @@ Older docs in this repository may still describe a larger Hermes manager archite
 
 - `imageroot/` contains the current NS8 actions, helper script, event handler, and user systemd unit.
 - `ui/` contains the embedded Vue 2 and Vue CLI application.
-- `containers/` contains thin component image wrappers for Hermes, Gateway, and OpenViking.
+- `containers/` contains thin component image wrappers for Hermes and OpenViking.
 - `tests/` contains the Robot Framework suite and Python test dependencies.
 
 See `STRUCTURE.md` for a file-by-file map.
@@ -75,6 +75,9 @@ Output example:
 
     {"module_id": "hermes-agent1", "image_name": "hermes-agent", "image_url": "ghcr.io/nethserver/hermes-agent:latest"}
 
+The current checked-in refactor covers fresh installs only. No in-place upgrade
+path from the older split Hermes plus gateway runtime is shipped in this tree.
+
 ## Configure
 
 Let's assume that the hermes-agent instance is named `hermes-agent1`.
@@ -101,7 +104,8 @@ Example:
 
 The above command will:
 - validate and store the agent roster in `environment`
-- generate `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env`
+- synchronize `systemd.env`, one shared `openviking.conf`, and per-agent `agent-<id>.env` and `agent-<id>_secrets.env` runtime files
+- remove per-agent runtime files for stopped or deleted agents
 - generate and preserve one shared `OPENVIKING_ROOT_API_KEY` in `secrets.env`
 - provision one OpenViking account and admin user per started agent and store that tenant user key as `OPENVIKING_API_KEY` in `agent-<id>_secrets.env`
 - generate `systemd.env` with only the controlled image variables needed by systemd units, including the internal shared OpenViking host port
@@ -121,28 +125,22 @@ Example output:
 the desired configuration.
 
 Started agents enable a templated user target named `hermes-agent@<id>.target`.
-That target brings up a Podman pod plus two per-agent container services, while
-all started agents share one OpenViking service:
+That target brings up one per-agent Hermes runtime service in gateway mode,
+while all started agents share one OpenViking service:
 
 - `hermes-agent-openviking.service`
-- `hermes-agent-pod@<id>.service`
 - `hermes-agent-hermes@<id>.service`
-- `hermes-agent-gateway@<id>.service`
 
 The persistent storage contract is currently:
 
-- `hermes-agent-gateway@<id>.service` mounts `hermes-agent-hermes-data-<id>` at `/opt/data`
-- `hermes-agent-hermes@<id>.service` mounts the same `hermes-agent-hermes-data-<id>` volume at `/opt/data`
+- `hermes-agent-hermes@<id>.service` mounts `hermes-agent-hermes-data-<id>` at `/opt/data`
 - `hermes-agent-openviking.service` mounts the shared volume `hermes-agent-openviking-data` at `/app/data`
 - `hermes-agent-openviking.service` bind-mounts the generated shared `openviking.conf` to `/app/ov.conf`
 
-The idle Hermes container stays passive in the current scaffold, so the shared
-Hermes home is still owned operationally by the gateway and is not used by two
-active Hermes processes at once.
-
-The gateway wrapper now keeps the upstream Hermes Docker entrypoint, so first
-start still bootstraps `/opt/data` with default `.env`, `config.yaml`,
-`SOUL.md`, and bundled skills.
+The Hermes wrapper keeps the upstream Hermes Docker entrypoint and now defaults
+directly to `gateway run`, so first start still bootstraps `/opt/data` with
+default `.env`, `config.yaml`, `SOUL.md`, and bundled skills without splitting
+the Hermes home across two containers.
 
 ## Smarthost setting discovery
 
@@ -184,8 +182,8 @@ Run the module test with:
 
 The checked-in test suite is written with [Robot Framework](https://robotframework.org/) and
 currently validates shared OpenViking runtime generation, actual runtime status
-from `get-configuration`, per-agent target plus container service state, tenant
-account isolation through the shared OpenViking admin API, named volume
+from `get-configuration`, per-agent target plus runtime container state,
+tenant account isolation through the shared OpenViking admin API, named volume
 creation, persistence across target restart, stopped-agent runtime cleanup,
 reconfiguration cleanup, and module removal.
 

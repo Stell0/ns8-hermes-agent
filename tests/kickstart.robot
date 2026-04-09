@@ -82,7 +82,7 @@ Check if hermes-agent returns actual agent states and tenant metadata
     Set Suite Variable    ${agent2_user}
     Set Suite Variable    ${agent2_agent_id}
 
-Check if hermes-agent starts one shared OpenViking service and one pod per running agent
+Check if hermes-agent starts one shared OpenViking service and one runtime per running agent
     ${target1_output}  ${target1_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent@1.target'
     ...    return_rc=True
     ${pod_output}  ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent-pod@1.service'
@@ -97,64 +97,59 @@ Check if hermes-agent starts one shared OpenViking service and one pod per runni
     ...    return_rc=True
     ${shared_container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-openviking'
     ...    return_rc=True  return_stdout=False
+    ${hermes_container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-hermes-1'
+    ...    return_rc=True  return_stdout=False
     ${pod_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-agent-1'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${target1_rc}  0
-    Should Be Equal As Integers    ${pod_rc}  0
+    Should Not Be Equal As Integers    ${pod_rc}  0
     Should Be Equal As Integers    ${openviking_rc}  0
     Should Not Be Equal As Integers    ${legacy_openviking_rc}  0
     Should Be Equal As Integers    ${hermes_rc}  0
-    Should Be Equal As Integers    ${gateway_rc}  0
+    Should Not Be Equal As Integers    ${gateway_rc}  0
     Should Be Equal As Integers    ${shared_container_rc}  0
-    Should Be Equal As Integers    ${pod_exists_rc}  0
+    Should Be Equal As Integers    ${hermes_container_rc}  0
+    Should Not Be Equal As Integers    ${pod_exists_rc}  0
     Should Be Equal    ${target1_output}  active
-    Should Be Equal    ${pod_output}  active
     Should Be Equal    ${openviking_output}  active
     Should Be Equal    ${hermes_output}  active
-    Should Be Equal    ${gateway_output}  active
 
 Check if hermes-agent creates persistent volumes and keeps data across restart
     ${hermes_volume_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume exists hermes-agent-hermes-data-1'
     ...    return_rc=True  return_stdout=False
     ${openviking_volume_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume exists hermes-agent-openviking-data'
     ...    return_rc=True  return_stdout=False
-    ${write_gateway_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-gateway-1 sh -lc "printf persistent > /opt/data/persist-sentinel"'
+    ${write_runtime_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-hermes-1 sh -lc "printf persistent > /opt/data/persist-sentinel"'
     ...    return_rc=True  return_stdout=False
     ${write_openviking_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-openviking sh -lc "mkdir -p /app/data/test && printf persistent > /app/data/test/persist-sentinel"'
     ...    return_rc=True  return_stdout=False
     ${restart_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user restart hermes-agent@1.target'
     ...    return_rc=True  return_stdout=False
-    ${gateway_restart_output}  ${gateway_restart_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent-gateway@1.service'
-    ...    return_rc=True
     ${hermes_restart_output}  ${hermes_restart_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent-hermes@1.service'
     ...    return_rc=True
     ${openviking_restart_output}  ${openviking_restart_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent-openviking.service'
     ...    return_rc=True
-    ${gateway_sentinel} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-gateway-1 sh -lc "cat /opt/data/persist-sentinel"'
-    ${hermes_sentinel} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-hermes-1 sh -lc "cat /opt/data/persist-sentinel"'
+    ${runtime_sentinel} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-hermes-1 sh -lc "cat /opt/data/persist-sentinel"'
     ${openviking_sentinel} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-openviking sh -lc "cat /app/data/test/persist-sentinel"'
     Should Be Equal As Integers    ${hermes_volume_rc}  0
     Should Be Equal As Integers    ${openviking_volume_rc}  0
-    Should Be Equal As Integers    ${write_gateway_rc}  0
+    Should Be Equal As Integers    ${write_runtime_rc}  0
     Should Be Equal As Integers    ${write_openviking_rc}  0
     Should Be Equal As Integers    ${restart_rc}  0
-    Should Be Equal As Integers    ${gateway_restart_rc}  0
     Should Be Equal As Integers    ${hermes_restart_rc}  0
     Should Be Equal As Integers    ${openviking_restart_rc}  0
-    Should Be Equal    ${gateway_restart_output}  active
     Should Be Equal    ${hermes_restart_output}  active
     Should Be Equal    ${openviking_restart_output}  active
-    Should Be Equal    ${gateway_sentinel}  persistent
-    Should Be Equal    ${hermes_sentinel}  persistent
+    Should Be Equal    ${runtime_sentinel}  persistent
     Should Be Equal    ${openviking_sentinel}  persistent
 
 Check if hermes-agent keeps stopped agents inactive
     ${target2_output}  ${target2_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent@2.target'
     ...    return_rc=True
-    ${pod2_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-agent-2'
+    ${runtime2_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-hermes-2'
     ...    return_rc=True  return_stdout=False
     Should Not Be Equal As Integers    ${target2_rc}  0
-    Should Not Be Equal As Integers    ${pod2_exists_rc}  0
+    Should Not Be Equal As Integers    ${runtime2_exists_rc}  0
     Should Be Equal    ${target2_output}  inactive
 
 Check if hermes-agent can start a second agent on the shared OpenViking instance
@@ -169,7 +164,7 @@ Check if hermes-agent can start a second agent on the shared OpenViking instance
     ...    return_rc=True
     ${shared_openviking_output}  ${shared_openviking_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent-openviking.service'
     ...    return_rc=True
-    ${pod2_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-agent-2'
+    ${runtime2_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-hermes-2'
     ...    return_rc=True  return_stdout=False
     Should Not Be Empty    ${agent2_env}
     Should Not Be Empty    ${agent2_secrets}
@@ -177,7 +172,7 @@ Check if hermes-agent can start a second agent on the shared OpenViking instance
     Should Not Be Equal    ${agent1_openviking_key}  ${agent2_openviking_key}
     Should Be Equal As Integers    ${target2_rc}  0
     Should Be Equal As Integers    ${shared_openviking_rc}  0
-    Should Be Equal As Integers    ${pod2_exists_rc}  0
+    Should Be Equal As Integers    ${runtime2_exists_rc}  0
     Should Be Equal    ${target2_output}  active
     Should Be Equal    ${shared_openviking_output}  active
     Set Suite Variable    ${agent2_openviking_key}
@@ -222,9 +217,9 @@ Check if hermes-agent cleans removed agents and keeps shared OpenViking accounts
     ...    return_rc=True
     ${target2_output}  ${target2_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent@2.target'
     ...    return_rc=True
-    ${pod1_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-agent-1'
+    ${runtime1_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-hermes-1'
     ...    return_rc=True  return_stdout=False
-    ${pod2_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-agent-2'
+    ${runtime2_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-hermes-2'
     ...    return_rc=True  return_stdout=False
     ${hermes_volume1_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume exists hermes-agent-hermes-data-1'
     ...    return_rc=True  return_stdout=False
@@ -247,8 +242,8 @@ Check if hermes-agent cleans removed agents and keeps shared OpenViking accounts
     Should Be Equal    ${target1_output}  inactive
     Should Be Equal As Integers    ${target2_rc}  0
     Should Be Equal    ${target2_output}  active
-    Should Not Be Equal As Integers    ${pod1_exists_rc}  0
-    Should Be Equal As Integers    ${pod2_exists_rc}  0
+    Should Not Be Equal As Integers    ${runtime1_exists_rc}  0
+    Should Be Equal As Integers    ${runtime2_exists_rc}  0
     Should Not Be Equal As Integers    ${hermes_volume1_rc}  0
     Should Be Equal As Integers    ${openviking_volume_rc}  0
     Should Be Equal As Integers    ${hermes_volume2_rc}  0

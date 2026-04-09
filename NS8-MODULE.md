@@ -6,17 +6,17 @@ This document describes the current checked-in NS8 module implementation for
 ## Scope
 
 The current module is a rootless NS8 application scaffold that manages a stored
-roster of agents. Each configured agent can own an isolated Podman pod managed
-by systemd user units, while one shared OpenViking runtime is reused across all
-agents inside the same module instance.
+roster of agents. Each configured agent can own one isolated Hermes runtime
+container managed by systemd user units, while one shared OpenViking runtime is
+reused across all agents inside the same module instance.
 
 The current runtime includes:
 
 - `configure-module`, `get-configuration`, and `destroy-module`
 - smarthost discovery and one `smarthost-changed` event handler
 - generated per-agent env and secrets files plus one shared OpenViking config
-- user systemd units for one shared OpenViking service plus one pod per agent
-- three wrapper container images: Hermes, Hermes gateway, and OpenViking
+- user systemd units for one shared OpenViking service plus one Hermes runtime service per agent
+- two wrapper container images: Hermes and OpenViking
 - an embedded Vue 2 admin UI
 - a Robot Framework smoke test focused on the shared OpenViking plus per-agent runtime contract
 
@@ -45,7 +45,7 @@ numbered executable steps.
 
 ## Repository Components Relevant To NS8
 
-- `build-images.sh`: builds the module image and three wrapper images
+- `build-images.sh`: builds the module image and two wrapper images
 - `imageroot/actions/`: action implementations for configure, read, and destroy
 - `imageroot/bin/`: runtime helper scripts
 - `imageroot/pypkg/`: shared Python runtime helpers
@@ -55,13 +55,12 @@ numbered executable steps.
 
 ## Image Build And Packaging
 
-`build-images.sh` builds four images:
+`build-images.sh` builds three images:
 
 | Image | Purpose |
 |------|---------|
 | `ghcr.io/nethserver/hermes-agent` | Main NS8 module image with `imageroot/` and the compiled UI bundle. |
-| `ghcr.io/nethserver/hermes-agent-hermes` | Thin wrapper around the upstream Hermes image. |
-| `ghcr.io/nethserver/hermes-agent-gateway` | Hermes gateway wrapper image. |
+| `ghcr.io/nethserver/hermes-agent-hermes` | Thin wrapper around the upstream Hermes image that preserves the upstream entrypoint and defaults to `gateway run`. |
 | `ghcr.io/nethserver/hermes-agent-openviking` | OpenViking wrapper image. |
 
 The module image currently sets these relevant NS8 labels:
@@ -74,8 +73,7 @@ The practical effect is:
 - the module runs rootless
 - the core pulls the additional wrapper images on install and update
 - the pulled image URLs are exposed as environment variables such as
-  `HERMES_AGENT_HERMES_IMAGE`, `HERMES_AGENT_GATEWAY_IMAGE`, and
-  `HERMES_AGENT_OPENVIKING_IMAGE`
+  `HERMES_AGENT_HERMES_IMAGE` and `HERMES_AGENT_OPENVIKING_IMAGE`
 
 The current image does not declare `org.nethserver.volumes`, so the per-agent
 named volumes created by the runtime stay internal to the module and are not
@@ -94,14 +92,15 @@ add-module
   -> configure-module
        - validates and persists the agent roster in environment
        - discovers smarthost settings
-     - writes systemd.env plus per-agent env and secrets files and one shared OpenViking config
+    - writes systemd.env, one shared OpenViking config, and the per-agent env and secrets files used during reconciliation
        - starts or stops per-agent systemd targets based on desired status
+    - removes stopped or deleted agent runtime files, named volumes, and OpenViking tenant accounts
   -> module running
        - get-configuration returns the stored roster with actual runtime status
        - smarthost-changed refreshes active per-agent targets only
   -> destroy-module
        - stops and disables per-agent targets
-     - removes pods, per-agent named volumes, shared OpenViking runtime state, and generated runtime files
+    - removes runtime containers, per-agent named volumes, shared OpenViking runtime state, and generated runtime files
        - core removes the rootless module state and service user
 ```
 
@@ -185,8 +184,8 @@ Example output:
 }
 ```
 
-`start` means all required services for that agent pod are active. Otherwise the
-action returns `stop`.
+`start` means the shared OpenViking service and that agent's Hermes service are
+active. Otherwise the action returns `stop`.
 
 ### `destroy-module`
 
@@ -194,7 +193,7 @@ action returns `stop`.
 
 | Step | File | Purpose |
 |------|------|---------|
-| 20 | `20destroy` | Stops and disables all known per-agent targets, removes pods and per-agent named volumes, deletes generated per-agent runtime files, and removes the shared OpenViking runtime state. |
+| 20 | `20destroy` | Stops and disables all known per-agent targets, removes runtime containers and per-agent named volumes, deletes generated per-agent runtime files, and removes the shared OpenViking runtime state. |
 
 ### Base actions used but not customized
 
@@ -205,6 +204,9 @@ The current repository does not customize:
 - `update-module`
 
 No `update-module.d/` scripts are currently shipped.
+
+The current checked-in refactor covers fresh installs only. No in-place upgrade
+path from the older split Hermes plus gateway runtime is implemented here.
 
 ## Runtime State Files
 
@@ -275,7 +277,7 @@ This helper:
 - reloads the user systemd daemon
 - starts or stops the shared OpenViking service when needed
 - starts or stops `hermes-agent@<id>.target` based on the desired state
-- cleans stale pods, per-agent named volumes, and removed-agent OpenViking accounts
+- cleans stale runtime files, runtime containers, per-agent named volumes, and removed-agent OpenViking accounts
 
 ### `reload-agent-services`
 
@@ -304,14 +306,12 @@ This module centralizes:
 The checked-in unit templates under `imageroot/systemd/user/` are:
 
 - `hermes-agent@.target`: umbrella target for one agent stack
-- `hermes-agent-openviking.service`: runs the shared OpenViking container outside the per-agent pods
-- `hermes-agent-pod@.service`: creates and removes the Podman pod
-- `hermes-agent-hermes@.service`: runs the Hermes container in the pod
-- `hermes-agent-gateway@.service`: runs the gateway container in the pod
+- `hermes-agent-openviking.service`: runs the shared OpenViking container
+- `hermes-agent-hermes@.service`: runs the Hermes container in gateway mode
 
 Starting `hermes-agent@1.target` ensures the shared OpenViking service is up,
-creates a rootless pod named `hermes-agent-1`, provisions the agent tenant if
-needed, and starts the two per-agent containers inside the pod.
+provisions the agent tenant if needed, and starts the per-agent Hermes runtime
+container.
 
 The container services use `systemd.env` only for controlled image variables and
 inject per-agent runtime data through:
@@ -321,21 +321,16 @@ inject per-agent runtime data through:
 
 The current persistent storage layout is:
 
-- `hermes-agent-gateway@.service` mounts the per-agent named volume
-  `hermes-agent-hermes-data-%i` at `/opt/data`
-- `hermes-agent-hermes@.service` mounts the same per-agent named volume
+- `hermes-agent-hermes@.service` mounts the per-agent named volume
   `hermes-agent-hermes-data-%i` at `/opt/data`
 - `hermes-agent-openviking.service` mounts the shared named volume
   `hermes-agent-openviking-data` at `/app/data`
 - `hermes-agent-openviking.service` bind-mounts `%S/state/openviking.conf` at
   `/app/ov.conf`
 
-The Hermes sidecar remains idle in the current scaffold, so the shared Hermes
-home is not used by two active Hermes processes at once.
-
-The gateway wrapper preserves the upstream Hermes Docker entrypoint, so the
-Hermes data volume is bootstrapped on first start with default `.env`,
-`config.yaml`, `SOUL.md`, and bundled skills.
+The Hermes wrapper preserves the upstream Hermes Docker entrypoint and defaults
+directly to `gateway run`, so the Hermes data volume is bootstrapped on first
+start with default `.env`, `config.yaml`, `SOUL.md`, and bundled skills.
 
 ## Events
 
@@ -368,9 +363,9 @@ It validates this flow:
 2. configure two agents with mixed `start` and `stop` state
 3. verify shared runtime files plus running-agent runtime files exist
 4. verify `get-configuration` reports actual runtime status and tenant metadata
-5. verify the shared OpenViking service, the per-agent target, pod service,
-  container services, and Podman pod state for the active agent, and verify
-  inactive target plus absent pod state for the stopped agent
+5. verify the shared OpenViking service, the per-agent target, the runtime
+  container service, and container state for the active agent, and verify
+  inactive target plus absent runtime container state for the stopped agent
 6. verify the active agent creates the expected named volumes and preserves
   Hermes and OpenViking data across `hermes-agent@<id>.target` restart
 7. reconfigure the roster so both agents start and verify the shared OpenViking

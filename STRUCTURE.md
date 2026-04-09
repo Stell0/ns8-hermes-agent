@@ -6,11 +6,24 @@ Hermes manager components that are not yet present in the tree.
 ## Root files
 
 - `AGENTS.md`: repo-wide instructions.
+- `NS8_RESOURCE_MAP.md`: NS8-specific documentation index for actions, UI, build flow, and module patterns.
+- `HERMES_RESOURCE_MAP.md`: Hermes-specific documentation index for container behavior, runtime setup, and agent integration.
+- `OPENVIKING_RESOURCE_MAP.md`: OpenViking documentation index for tenant, server, and deployment behavior.
 - `README.md`: current project status and usage notes.
 - `STRUCTURE.md`: this file.
-- `build-images.sh`: builds the module image and the three wrapper images.
+- `build-images.sh`: builds the module image and the two wrapper images.
 - `test-module.sh`: runs the Robot Framework module test.
 - `renovate.json`: Renovate configuration.
+
+## `.github/`
+
+- `agents/researcher.agent.md`: custom agent that searches `*_RESOURCE_MAP.md` files, browses documentation, and gathers prior art before implementation.
+- `agents/security-expert.agent.md`: custom agent that reviews changes for security risks and applies or reports minimal mitigations.
+- `agents/tester.agent.md`: custom agent that adds or updates unit and Robot Framework integration tests and runs the relevant test commands.
+- `agents/docs-maintainer.agent.md`: custom agent that keeps checked-in Markdown docs aligned with the implementation.
+- `agents/code-reviewer.agent.md`: custom agent that reviews diffs for minimality, readability, and maintainability.
+- `agents/committer.agent.md`: custom agent that reviews git changes and creates Conventional Commits.
+- `workflows/`: GitHub Actions workflows for image publishing, API-doc build and cleanup, registry cleanup, module and infrastructure tests, and UI build checks.
 
 ## `imageroot/`
 
@@ -25,14 +38,14 @@ Hermes manager components that are not yet present in the tree.
 - `configure-module/validate-input.json`: input schema for `configure-module`, including agent validation.
 - `get-configuration/20read`: parses `AGENTS_LIST` from `environment` and returns the current agents with persisted tenant metadata and actual systemd-backed status.
 - `get-configuration/validate-output.json`: output schema for the structured `agents` response.
-- `destroy-module/20destroy`: stops and cleans all per-agent units, pods, named volumes, generated runtime files, and the shared OpenViking runtime.
+- `destroy-module/20destroy`: stops and cleans all per-agent units, runtime containers, named volumes, generated runtime files, and the shared OpenViking runtime.
 
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings, merges public values into `environment`, and writes `SMTP_PASSWORD` to `secrets.env`.
 - `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generating and preserving one shared OpenViking root key plus per-agent tenant metadata.
 - `ensure-openviking-tenant`: waits for the shared OpenViking service, provisions the per-agent account and user if needed, and writes the tenant API key to `agent-<id>_secrets.env`.
-- `start-agent-services`: reconciles the shared OpenViking service plus per-agent systemd targets and pods after `configure-module`.
+- `start-agent-services`: reconciles the shared OpenViking service plus per-agent systemd targets and runtime containers after `configure-module`.
 - `reload-agent-services`: refreshes active agent targets after smarthost changes.
 
 ### `imageroot/pypkg/`
@@ -47,16 +60,13 @@ Hermes manager components that are not yet present in the tree.
 
 - `hermes-agent@.target`: per-agent umbrella target.
 - `hermes-agent-openviking.service`: runs the shared OpenViking container with one shared named data volume and one generated `ov.conf` bind mount.
-- `hermes-agent-pod@.service`: creates and removes the Podman pod for one agent after ensuring the shared OpenViking tenant exists.
-- `hermes-agent-hermes@.service`: runs the idle Hermes container inside the per-agent pod with the shared per-agent Hermes state volume mounted at `/opt/data`.
-- `hermes-agent-gateway@.service`: runs the Hermes gateway container inside the per-agent pod with the same per-agent Hermes state volume mounted at `/opt/data`.
+- `hermes-agent-hermes@.service`: runs the Hermes runtime container in gateway mode with the per-agent Hermes state volume mounted at `/opt/data`.
 
 ## `containers/`
 
 Thin component wrapper images used by the module image labels:
 
-- `containers/hermes/Containerfile`: wrapper around the upstream Hermes runtime image.
-- `containers/gateway/Containerfile`: wrapper for Hermes gateway mode that keeps the upstream `/opt/data` bootstrap entrypoint.
+- `containers/hermes/Containerfile`: wrapper around the upstream Hermes runtime image that preserves the upstream `/opt/data` bootstrap entrypoint and defaults to gateway mode.
 - `containers/openviking/Containerfile`: wrapper around the upstream OpenViking image.
 
 ## `ui/`
@@ -84,5 +94,5 @@ The embedded admin UI currently uses Vue 2 and Vue CLI.
 ## `tests/`
 
 - `__init__.robot`: Robot Framework initialization file.
-- `kickstart.robot`: install, configure, shared OpenViking, hidden tenant metadata, stopped-agent cleanup, tenant-isolation, persistent-volume, cleanup, and remove test flow.
+- `kickstart.robot`: install, configure, shared OpenViking, hidden tenant metadata, single-runtime-container lifecycle, tenant-isolation, persistent-volume, cleanup, and remove test flow.
 - `pythonreq.txt`: Python dependencies used by the test runner.
