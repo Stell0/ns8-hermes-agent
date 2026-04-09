@@ -7,7 +7,8 @@
     "type": "object",
     "additionalProperties": false,
     "required": [
-        "agents"
+        "agents",
+        "openviking"
     ],
     "properties": {
         "agents": {
@@ -24,7 +25,7 @@
                 "properties": {
                     "id": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 0
                     },
                     "name": {
                         "type": "string",
@@ -59,6 +60,47 @@
                         "type": "string",
                         "minLength": 1,
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                    },
+                    "hidden": {
+                        "type": "boolean"
+                    },
+                    "protected": {
+                        "type": "boolean"
+                    },
+                    "system": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        "openviking": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "embedding"
+            ],
+            "properties": {
+                "embedding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "api_key_configured"
+                    ],
+                    "properties": {
+                        "provider": {
+                            "type": "string",
+                            "enum": [
+                                "gemini",
+                                "jina",
+                                "minimax",
+                                "openai",
+                                "volcengine",
+                                "voyage"
+                            ]
+                        },
+                        "api_key_configured": {
+                            "type": "boolean"
+                        }
                     }
                 }
             }

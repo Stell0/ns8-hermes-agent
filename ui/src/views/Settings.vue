@@ -22,6 +22,71 @@
       </cv-row>
       <cv-row>
         <cv-column>
+          <cv-tile light class="section-tile">
+            <cv-grid class="no-padding">
+              <cv-row>
+                <cv-column :md="6" :max="8">
+                  <h4 class="section-title">
+                    {{ $t("settings.openviking_title") }}
+                  </h4>
+                  <p class="section-description">
+                    {{ $t("settings.openviking_description") }}
+                  </p>
+                </cv-column>
+              </cv-row>
+              <cv-row>
+                <cv-column :md="4" :max="8">
+                  <cv-select
+                    v-model="openviking.embedding.provider"
+                    :label="$t('settings.embedding_provider')"
+                    :invalid-message="error.embeddingProvider"
+                    :disabled="loading.getConfiguration || loading.configureModule"
+                    ref="embeddingProvider"
+                    class="mg-bottom-lg"
+                  >
+                    <cv-select-option value="">
+                      {{ $t("settings.embedding_provider_none") }}
+                    </cv-select-option>
+                    <cv-select-option
+                      v-for="provider in embeddingProviders"
+                      :key="provider.value"
+                      :value="provider.value"
+                    >
+                      {{ provider.label }}
+                    </cv-select-option>
+                  </cv-select>
+                </cv-column>
+                <cv-column :md="4" :max="8">
+                  <NsTextInput
+                    v-model.trim="openviking.embedding.api_key"
+                    :label="$t('settings.embedding_api_key')"
+                    :placeholder="$t('settings.embedding_api_key_placeholder')"
+                    :invalid-message="error.embeddingApiKey"
+                    :disabled="loading.getConfiguration || loading.configureModule"
+                    ref="embeddingApiKey"
+                    type="password"
+                  />
+                  <p class="field-helper">
+                    {{ embeddingApiKeyHelper }}
+                  </p>
+                </cv-column>
+              </cv-row>
+              <cv-row v-if="showEmbeddingChangeWarning">
+                <cv-column>
+                  <NsInlineNotification
+                    kind="warning"
+                    :title="$t('settings.embedding_warning_title')"
+                    :description="$t('settings.embedding_warning_description')"
+                    :showCloseButton="false"
+                  />
+                </cv-column>
+              </cv-row>
+            </cv-grid>
+          </cv-tile>
+        </cv-column>
+      </cv-row>
+      <cv-row>
+        <cv-column>
           <cv-tile light>
             <cv-grid class="no-padding">
               <cv-row class="toolbar-row">
@@ -54,7 +119,7 @@
                     :line-count="6"
                   ></cv-skeleton-text>
                   <NsEmptyState
-                    v-else-if="!agents.length"
+                    v-else-if="!visibleAgents.length"
                     :title="$t('settings.no_agents')"
                   ></NsEmptyState>
                   <cv-structured-list v-else>
@@ -74,7 +139,7 @@
                     </template>
                     <template slot="items">
                       <cv-structured-list-item
-                        v-for="agentData in agents"
+                        v-for="agentData in visibleAgents"
                         :key="agentData.id"
                       >
                         <cv-structured-list-data class="break-word">
@@ -289,6 +354,8 @@ export default {
       },
       urlCheckInterval: null,
       roles: ["default", "developer"],
+      openviking: this.defaultOpenVikingState(),
+      loadedOpenViking: this.defaultOpenVikingState(),
       agents: [],
       submittedAgents: [],
       configureMode: "",
@@ -308,11 +375,39 @@ export default {
         configureModule: "",
         createAgentName: "",
         createAgentRole: "",
+        embeddingProvider: "",
+        embeddingApiKey: "",
       },
     };
   },
   computed: {
     ...mapState(["instanceName", "core", "appName"]),
+    embeddingProviders() {
+      return [
+        { value: "openai", label: this.$t("settings.embedding_provider_openai") },
+        { value: "volcengine", label: this.$t("settings.embedding_provider_volcengine") },
+        { value: "jina", label: this.$t("settings.embedding_provider_jina") },
+        { value: "voyage", label: this.$t("settings.embedding_provider_voyage") },
+        { value: "minimax", label: this.$t("settings.embedding_provider_minimax") },
+        { value: "gemini", label: this.$t("settings.embedding_provider_gemini") },
+      ];
+    },
+    visibleAgents() {
+      return this.agents.filter((agentData) => !agentData.hidden);
+    },
+    embeddingApiKeyHelper() {
+      if (this.openviking.embedding.api_key_configured && !this.openviking.embedding.api_key) {
+        return this.$t("settings.embedding_api_key_preserved");
+      }
+
+      return this.$t("settings.embedding_api_key_help");
+    },
+    showEmbeddingChangeWarning() {
+      const initialProvider = this.loadedOpenViking.embedding.provider;
+      const currentProvider = this.openviking.embedding.provider;
+
+      return !!initialProvider && initialProvider !== currentProvider;
+    },
     showPageConfigureError() {
       return this.configureMode === "page" && !!this.error.configureModule;
     },
@@ -384,6 +479,8 @@ export default {
       const config = taskResult.output;
 
       this.agents = this.normalizeAgents(config.agents || []);
+      this.openviking = this.normalizeOpenViking(config.openviking || {});
+      this.loadedOpenViking = this.normalizeOpenViking(config.openviking || {});
     },
     configureModuleValidationFailed(validationErrors) {
       this.loading.configureModule = false;
@@ -392,6 +489,7 @@ export default {
       if (this.configureMode === "create") {
         this.clearCreateAgentErrors();
       }
+      this.clearOpenVikingErrors();
 
       for (const validationError of validationErrors) {
         const field = validationError.field || validationError.parameter || "";
@@ -418,6 +516,29 @@ export default {
               focusAlreadySet = true;
             }
           }
+
+        }
+
+        if (field.includes("provider")) {
+          this.error.embeddingProvider = this.$t(
+            "settings.embedding_provider_invalid"
+          );
+
+          if (!focusAlreadySet) {
+            this.focusElement("embeddingProvider");
+            focusAlreadySet = true;
+          }
+        }
+
+        if (field.includes("api_key")) {
+          this.error.embeddingApiKey = this.$t(
+            "settings.embedding_api_key_invalid"
+          );
+
+          if (!focusAlreadySet) {
+            this.focusElement("embeddingApiKey");
+            focusAlreadySet = true;
+          }
         }
       }
 
@@ -426,6 +547,7 @@ export default {
     async saveAgents(nextAgents, mode) {
       this.loading.configureModule = true;
       this.error.configureModule = "";
+      this.clearOpenVikingErrors();
       this.configureMode = mode;
       this.submittedAgents = this.normalizeAgents(nextAgents);
       const taskAction = "configure-module";
@@ -450,7 +572,8 @@ export default {
         this.createModuleTaskForApp(this.instanceName, {
           action: taskAction,
           data: {
-            agents: this.submittedAgents,
+            agents: this.buildAgentPayload(this.submittedAgents),
+            openviking: this.buildOpenVikingPayload(),
           },
           extra: {
             title: this.$t("settings.configure_instance", {
@@ -477,6 +600,9 @@ export default {
             name: (agentData.name || "").trim(),
             role: agentData.role,
             status: agentData.status === "stop" ? "stop" : "start",
+            hidden: !!agentData.hidden,
+            protected: !!agentData.protected,
+            system: !!agentData.system,
           };
 
           for (const field of ["account", "user", "agent_id"]) {
@@ -493,16 +619,100 @@ export default {
         .filter((agentData) => {
           return (
             Number.isInteger(agentData.id) &&
-            agentData.id > 0 &&
+            agentData.id >= 0 &&
             agentData.name &&
             this.roles.includes(agentData.role)
           );
         })
         .sort((left, right) => left.id - right.id);
     },
+    defaultOpenVikingState() {
+      return {
+        embedding: {
+          provider: "",
+          api_key: "",
+          api_key_configured: false,
+        },
+      };
+    },
+    normalizeOpenViking(openvikingData) {
+      const normalized = this.defaultOpenVikingState();
+      const embedding = openvikingData.embedding || {};
+
+      if (typeof embedding.provider === "string") {
+        normalized.embedding.provider = embedding.provider.trim();
+      }
+      normalized.embedding.api_key_configured = !!embedding.api_key_configured;
+
+      return normalized;
+    },
+    clearOpenVikingErrors() {
+      this.error.embeddingProvider = "";
+      this.error.embeddingApiKey = "";
+    },
+    validateOpenViking() {
+      this.clearOpenVikingErrors();
+
+      const provider = this.openviking.embedding.provider;
+      const apiKey = this.openviking.embedding.api_key;
+      const providerChanged =
+        this.loadedOpenViking.embedding.provider !== provider;
+
+      if (apiKey && !provider) {
+        this.error.embeddingProvider = this.$t("common.required");
+        this.focusElement("embeddingProvider");
+        return false;
+      }
+
+      if (!provider) {
+        return true;
+      }
+
+      if (
+        !apiKey &&
+        (!this.openviking.embedding.api_key_configured || providerChanged)
+      ) {
+        this.error.embeddingApiKey = this.$t("common.required");
+        this.focusElement("embeddingApiKey");
+        return false;
+      }
+
+      return true;
+    },
+    buildOpenVikingPayload() {
+      const embeddingPayload = {};
+      if (this.openviking.embedding.provider) {
+        embeddingPayload.provider = this.openviking.embedding.provider;
+      }
+      if (this.openviking.embedding.api_key) {
+        embeddingPayload.api_key = this.openviking.embedding.api_key;
+      }
+
+      return {
+        embedding: embeddingPayload,
+      };
+    },
+    buildAgentPayload(agents) {
+      return agents.map((agentData) => {
+        const payload = {
+          id: agentData.id,
+          name: agentData.name,
+          role: agentData.role,
+          status: agentData.status,
+        };
+
+        for (const field of ["account", "user", "agent_id"]) {
+          if (typeof agentData[field] === "string" && agentData[field]) {
+            payload[field] = agentData[field];
+          }
+        }
+
+        return payload;
+      });
+    },
     nextAgentId() {
       return (
-        this.agents.reduce((maxId, agentData) => {
+        this.visibleAgents.reduce((maxId, agentData) => {
           return Math.max(maxId, agentData.id);
         }, 0) + 1
       );
@@ -584,7 +794,7 @@ export default {
       }
 
       const nextAgents = [
-        ...this.agents,
+        ...this.visibleAgents,
         {
           id: this.nextAgentId(),
           name: this.createAgentForm.name.trim(),
@@ -619,7 +829,7 @@ export default {
         return;
       }
 
-      const nextAgents = this.agents.filter((agentData) => {
+      const nextAgents = this.visibleAgents.filter((agentData) => {
         return agentData.id !== this.agentToDelete.id;
       });
 
@@ -639,7 +849,11 @@ export default {
       });
     },
     saveAgentsFromPage() {
-      this.saveAgents(this.agents, "page");
+      if (!this.validateOpenViking()) {
+        return;
+      }
+
+      this.saveAgents(this.visibleAgents, "page");
     },
     configureModuleAborted(taskResult, taskContext) {
       console.error(`${taskContext.action} aborted`, taskResult);
@@ -647,7 +861,6 @@ export default {
       this.loading.configureModule = false;
     },
     configureModuleCompleted() {
-      const submittedAgents = this.normalizeAgents(this.submittedAgents);
       const mode = this.configureMode;
 
       this.loading.configureModule = false;
@@ -667,7 +880,7 @@ export default {
         return;
       }
 
-      this.agents = submittedAgents;
+      this.getConfiguration();
     },
   },
 };
@@ -677,6 +890,10 @@ export default {
 @import "../styles/carbon-utils";
 
 .toolbar-row {
+  margin-bottom: $spacing-06;
+}
+
+.section-tile {
   margin-bottom: $spacing-06;
 }
 
@@ -710,6 +927,11 @@ export default {
 
 .break-word {
   word-break: break-word;
+}
+
+.field-helper {
+  margin-top: $spacing-03;
+  color: $text-secondary;
 }
 
 @media (max-width: 671px) {

@@ -18,4 +18,4 @@ runtime_spec.loader.exec_module(runtime_module)
 
 
 request = json.load(sys.stdin)
-runtime_module.persist_agents(runtime_module.validate_agents(request.get("agents", [])))
+runtime_module.configure_module(request)
