@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import os
 import re
 import runpy
@@ -448,6 +449,164 @@ class ConfigureModuleValidationTest(unittest.TestCase):
             )
             self.assertEqual(target_path.read_text(encoding="utf-8"), "do not overwrite\n")
 
+    def test_extract_route_hosts_normalizes_and_deduplicates_hosts(self):
+        route_data = [
+            {"host": "portal.example.org"},
+            {"host": "Portal.Example.Org."},
+            {"host": "*.example.org"},
+            {"host": "127.0.0.1"},
+            {"host": "localhost"},
+            {"host": "host.containers.internal"},
+            {"host": "intranet"},
+            {"host": ""},
+            {"host": ["wiki.example.org", "wiki.example.org "]},
+            {"path": "/no-host"},
+        ]
+
+        self.assertEqual(
+            self.runtime.extract_route_hosts(route_data),
+            ["portal.example.org", "wiki.example.org"],
+        )
+
+    def test_fetch_node_traefik_route_hosts_uses_expanded_list_routes(self):
+        agent_tasks = types.SimpleNamespace(
+            run=mock.Mock(
+                return_value={
+                    "exit_code": 0,
+                    "output": json.dumps([
+                        {"host": "portal.example.org"},
+                        {"host": "wiki.example.org"},
+                    ]),
+                }
+            )
+        )
+
+        with mock.patch.object(self.runtime.agent, "resolve_agent_id", return_value="module/traefik1", create=True), mock.patch(
+            "importlib.import_module",
+            return_value=agent_tasks,
+        ):
+            route_hosts = self.runtime.fetch_node_traefik_route_hosts()
+
+        self.assertEqual(route_hosts, ["portal.example.org", "wiki.example.org"])
+        agent_tasks.run.assert_called_once_with(
+            agent_id="module/traefik1",
+            action="list-routes",
+            data={"expand_list": True},
+        )
+
+    def test_sync_traefik_route_hosts_reuses_cached_hosts_on_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            route_hosts_path = Path(temp_dir) / self.runtime.TRAEFIK_ROUTE_HOSTS_STATEFILE
+            route_hosts_path.write_text(json.dumps(["cached.example.org"]), encoding="utf-8")
+
+            with mock.patch.object(
+                self.runtime,
+                "fetch_node_traefik_route_hosts",
+                side_effect=RuntimeError("traefik unavailable"),
+            ):
+                route_hosts = self.runtime.sync_traefik_route_hosts(route_hosts_path)
+
+            self.assertEqual(route_hosts, ["cached.example.org"])
+            self.assertEqual(
+                json.loads(route_hosts_path.read_text(encoding="utf-8")),
+                ["cached.example.org"],
+            )
+
+    def test_sync_traefik_route_hosts_reuses_cached_hosts_on_unexpected_exception(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            route_hosts_path = Path(temp_dir) / self.runtime.TRAEFIK_ROUTE_HOSTS_STATEFILE
+            route_hosts_path.write_text(json.dumps(["cached.example.org"]), encoding="utf-8")
+
+            with mock.patch.object(
+                self.runtime,
+                "fetch_node_traefik_route_hosts",
+                side_effect=ValueError("malformed response"),
+            ):
+                route_hosts = self.runtime.sync_traefik_route_hosts(route_hosts_path)
+
+            self.assertEqual(route_hosts, ["cached.example.org"])
+
+    def test_sync_traefik_route_hosts_writes_empty_list_without_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            route_hosts_path = Path(temp_dir) / self.runtime.TRAEFIK_ROUTE_HOSTS_STATEFILE
+
+            with mock.patch.object(
+                self.runtime,
+                "fetch_node_traefik_route_hosts",
+                side_effect=RuntimeError("traefik unavailable"),
+            ):
+                route_hosts = self.runtime.sync_traefik_route_hosts(route_hosts_path)
+
+            self.assertEqual(route_hosts, [])
+            self.assertEqual(json.loads(route_hosts_path.read_text(encoding="utf-8")), [])
+
+    def test_sync_traefik_route_hosts_writes_fetched_hosts_on_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            route_hosts_path = Path(temp_dir) / self.runtime.TRAEFIK_ROUTE_HOSTS_STATEFILE
+
+            with mock.patch.object(
+                self.runtime,
+                "fetch_node_traefik_route_hosts",
+                return_value=["portal.example.org", "wiki.example.org"],
+            ):
+                route_hosts = self.runtime.sync_traefik_route_hosts(route_hosts_path)
+
+            self.assertEqual(route_hosts, ["portal.example.org", "wiki.example.org"])
+            self.assertEqual(
+                json.loads(route_hosts_path.read_text(encoding="utf-8")),
+                ["portal.example.org", "wiki.example.org"],
+            )
+
+    def test_build_hermes_container_command_adds_network_and_route_hosts(self):
+        shared_environment = {
+            self.runtime.TIMEZONE_ENV: "UTC",
+            self.runtime.HERMES_IMAGE_ENV: "example/hermes:latest",
+        }
+
+        command = self.runtime.build_hermes_container_command(
+            3,
+            shared_environment,
+            publish=["127.0.0.1:8642:8642"],
+            route_hosts=["portal.example.org", "wiki.example.org"],
+        )
+
+        self.assertIn("--network", command)
+        self.assertIn(self.runtime.HERMES_CONTAINER_NETWORK, command)
+        self.assertIn("--publish", command)
+        self.assertIn("127.0.0.1:8642:8642", command)
+        self.assertIn("portal.example.org:host-gateway", command)
+        self.assertIn("wiki.example.org:host-gateway", command)
+        self.assertEqual(command[-1], "example/hermes:latest")
+
+    def test_run_hermes_container_uses_cached_route_hosts_by_default(self):
+        shared_environment = {
+            self.runtime.TIMEZONE_ENV: "UTC",
+            self.runtime.HERMES_IMAGE_ENV: "example/hermes:latest",
+        }
+
+        with mock.patch.object(
+            self.runtime,
+            "read_optional_envfile",
+            return_value=shared_environment,
+        ), mock.patch.object(
+            self.runtime,
+            "read_cached_traefik_route_hosts",
+            return_value=["portal.example.org"],
+        ), mock.patch.object(
+            self.runtime,
+            "run_command",
+            return_value=types.SimpleNamespace(returncode=0),
+        ) as run_command:
+            returncode = self.runtime.run_hermes_container(3, publish=["127.0.0.1:8642:8642"])
+
+        self.assertEqual(returncode, 0)
+        command = run_command.call_args.args[0]
+        self.assertIn("--publish", command)
+        self.assertIn("127.0.0.1:8642:8642", command)
+        self.assertIn("--add-host", command)
+        self.assertIn("portal.example.org:host-gateway", command)
+        self.assertEqual(run_command.call_args.kwargs["check"], False)
+
     def test_sync_agent_runtime_files_seeds_soul_only_for_started_user_agents(self):
         started_agent = {
             "id": 1,
@@ -510,6 +669,10 @@ class ConfigureModuleValidationTest(unittest.TestCase):
             "write_envfile",
         ), mock.patch.object(
             self.runtime,
+            "sync_traefik_route_hosts",
+            return_value=[],
+        ), mock.patch.object(
+            self.runtime,
             "write_jsonfile",
         ), mock.patch.object(
             self.runtime,
@@ -521,6 +684,78 @@ class ConfigureModuleValidationTest(unittest.TestCase):
             self.runtime.sync_agent_runtime_files()
 
         sync_agent_soul.assert_called_once_with(started_agent, {})
+
+    def test_sync_agent_runtime_files_skips_route_refresh_for_agent_specific_sync_with_cache(self):
+        shared_environment = {
+            self.runtime.OPENVIKING_PORT_ENV: "23456",
+            self.runtime.TIMEZONE_ENV: "UTC",
+            self.runtime.HERMES_SYSTEM_API_PORT_ENV: str(self.runtime.HERMES_API_SERVER_PORT),
+            self.runtime.HERMES_IMAGE_ENV: "example/hermes:latest",
+        }
+        shared_secrets = {
+            self.runtime.OPENVIKING_ROOT_API_KEY_ENV: "root-key",
+        }
+        agent_data = {
+            "id": 1,
+            "name": "Started Agent",
+            "role": "developer",
+            "status": "start",
+            "account": "agent-1",
+            "user": "agent-1",
+            "agent_id": "agent-1",
+            "use_default_gateway_for_llm": False,
+        }
+
+        def read_optional_envfile_side_effect(path):
+            if path == self.runtime.ENVIRONMENT_FILE:
+                return shared_environment
+            if path == self.runtime.SHARED_SECRETS_ENVFILE:
+                return shared_secrets
+            return {}
+
+        with mock.patch.object(
+            self.runtime,
+            "read_managed_agents_from_state",
+            return_value=[self.runtime.system_agent_data(), agent_data],
+        ), mock.patch.object(
+            self.runtime,
+            "read_optional_envfile",
+            side_effect=read_optional_envfile_side_effect,
+        ), mock.patch.object(
+            self.runtime,
+            "ensure_shared_openviking_settings",
+            return_value=(23456, "root-key", self.runtime.HERMES_API_SERVER_PORT),
+        ), mock.patch.object(
+            self.runtime,
+            "build_agent_secrets_env",
+            return_value={},
+        ), mock.patch.object(
+            self.runtime,
+            "build_openviking_config",
+            return_value={},
+        ), mock.patch.object(
+            self.runtime,
+            "write_envfile",
+        ), mock.patch.object(
+            self.runtime,
+            "read_cached_traefik_route_hosts",
+            return_value=["portal.example.org"],
+        ), mock.patch.object(
+            self.runtime,
+            "sync_traefik_route_hosts",
+        ) as sync_traefik_route_hosts, mock.patch.object(
+            self.runtime,
+            "write_jsonfile",
+        ), mock.patch.object(
+            self.runtime,
+            "sync_agent_llm_gateway_config",
+        ), mock.patch.object(
+            self.runtime,
+            "sync_agent_soul",
+        ):
+            self.runtime.sync_agent_runtime_files(agent_id=1)
+
+        sync_traefik_route_hosts.assert_not_called()
 
     def test_ensure_shared_openviking_settings_requires_preseeded_openviking_port(self):
         shared_environment = {

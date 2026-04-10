@@ -16,18 +16,7 @@ ExecStartPre=/usr/local/bin/runagent discover-smarthost
 ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id 0
 ExecStartPre=/usr/local/bin/runagent ensure-openviking-tenant --agent-id 0
 ExecStartPre=-/usr/bin/podman rm --force hermes-agent-hermes-0
-ExecStart=/usr/bin/podman run \
-    --name hermes-agent-hermes-0 \
-    --replace \
-    --rm \
-    --sdnotify=conmon \
-    --cgroups=no-conmon \
-    --publish 127.0.0.1:${HERMES_SYSTEM_API_PORT}:8642 \
-    --volume hermes-agent-hermes-data-0:/opt/data:z \
-    --env-file %S/state/agent-0.env \
-    --env-file %S/state/agent-0_secrets.env \
-    --tz=${TIMEZONE} \
-    ${HERMES_AGENT_HERMES_IMAGE}
+ExecStart=/usr/local/bin/runagent run-hermes-container --agent-id 0 --publish 127.0.0.1:${HERMES_SYSTEM_API_PORT}:8642
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-hermes-0
 ExecStopPost=-/usr/bin/podman rm --force hermes-agent-hermes-0
 TimeoutStopSec=70

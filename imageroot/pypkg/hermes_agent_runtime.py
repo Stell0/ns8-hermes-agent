@@ -1,4 +1,6 @@
+import ipaddress
 import json
+import importlib
 import os
 import re
 import secrets
@@ -22,6 +24,7 @@ SYSTEMD_ENVFILE = "systemd.env"
 LEGACY_AGENTS_ENVFILE = "agents.env"
 LEGACY_SMARTHOST_ENVFILE = "smarthost.env"
 SHARED_OPENVIKING_CONFIGFILE = "openviking.conf"
+TRAEFIK_ROUTE_HOSTS_STATEFILE = "traefik-route-hosts.json"
 HERMES_IMAGE_ENV = "HERMES_AGENT_HERMES_IMAGE"
 ALLOWED_ROLES = {
     "default",
@@ -40,6 +43,9 @@ AGENT_ENVFILE_PATTERN = re.compile(r"^agent-(-?\d+)\.env$")
 AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent-(-?\d+)_secrets\.env$")
 AGENT_OPENVIKING_CONFIG_PATTERN = re.compile(r"^agent-(-?\d+)_openviking\.conf$")
 SYSTEMD_TARGET_PATTERN = re.compile(r"^hermes-agent@(\d+)\.target$")
+ROUTE_HOST_PATTERN = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
 OPENVIKING_CONFIG_PATH = "/app/ov.conf"
 OPENVIKING_WORKSPACE_PATH = "/app/data"
 TCP_PORT_ENV = "TCP_PORT"
@@ -53,6 +59,11 @@ OPENVIKING_EMBEDDING_API_KEY_ENV = "OPENVIKING_EMBEDDING_API_KEY"
 OPENVIKING_TENANT_MODE = "shared"
 OPENVIKING_LOCAL_HOST = "127.0.0.1"
 OPENVIKING_CONTAINER_HOST = "host.containers.internal"
+RESERVED_ROUTE_HOSTS = {
+    "localhost",
+    "localhost.localdomain",
+    OPENVIKING_CONTAINER_HOST,
+}
 OPENVIKING_LISTEN_HOST = "0.0.0.0"
 OPENVIKING_CONTAINER_PORT = 1933
 OPENVIKING_HEALTH_TIMEOUT = 60
@@ -73,6 +84,8 @@ HERMES_SYSTEM_API_PORT_ENV = "HERMES_SYSTEM_API_PORT"
 HERMES_API_SERVER_HOST = "0.0.0.0"
 HERMES_API_SERVER_PORT = 8642
 HERMES_API_MODEL_NAME = "hermes-agent"
+HERMES_CONTAINER_NETWORK = "slirp4netns:allow_host_loopback=true"
+HERMES_ROUTE_HOST_GATEWAY = "host-gateway"
 HERMES_MODEL_PROVIDER_KEY = "model.provider"
 HERMES_MODEL_DEFAULT_KEY = "model.default"
 HERMES_MODEL_BASE_URL_KEY = "model.base_url"
@@ -838,6 +851,17 @@ def write_jsonfile(path, data):
     os.chmod(file_path, 0o600)
 
 
+def read_jsonfile(path):
+    file_path = Path(path)
+
+    try:
+        return json.loads(file_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError:
+        return None
+
+
 def ensure_private_directory(path):
     directory_path = Path(path)
 
@@ -889,6 +913,139 @@ def write_private_textfile(path, content):
         if temp_path is not None and os.path.exists(temp_path):
             os.remove(temp_path)
         raise
+
+
+def normalize_route_host(value):
+    if not isinstance(value, str):
+        return None
+
+    normalized_value = value.strip().rstrip(".").lower()
+    if (
+        not normalized_value
+        or "." not in normalized_value
+        or normalized_value in RESERVED_ROUTE_HOSTS
+        or not ROUTE_HOST_PATTERN.fullmatch(normalized_value)
+    ):
+        return None
+
+    try:
+        ipaddress.ip_address(normalized_value)
+        return None
+    except ValueError:
+        pass
+
+    return normalized_value
+
+
+def normalize_route_hosts(route_hosts):
+    normalized_hosts = []
+    seen_hosts = set()
+
+    for route_host in route_hosts:
+        normalized_host = normalize_route_host(route_host)
+        if normalized_host is None or normalized_host in seen_hosts:
+            continue
+
+        seen_hosts.add(normalized_host)
+        normalized_hosts.append(normalized_host)
+
+    return sorted(normalized_hosts)
+
+
+def parse_task_output(output):
+    if output in (None, ""):
+        return []
+
+    if isinstance(output, (dict, list)):
+        return output
+
+    if not isinstance(output, str):
+        return []
+
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError:
+        return []
+
+
+def extract_route_hosts(route_data):
+    if isinstance(route_data, dict):
+        if isinstance(route_data.get("routes"), list):
+            routes = route_data["routes"]
+        else:
+            routes = [route_data]
+    elif isinstance(route_data, list):
+        routes = route_data
+    else:
+        routes = []
+
+    route_hosts = []
+    for route_entry in routes:
+        if not isinstance(route_entry, dict):
+            continue
+
+        route_host = route_entry.get("host")
+        if isinstance(route_host, list):
+            route_hosts.extend(route_host)
+        else:
+            route_hosts.append(route_host)
+
+    return normalize_route_hosts(route_hosts)
+
+
+def read_cached_traefik_route_hosts(path=TRAEFIK_ROUTE_HOSTS_STATEFILE):
+    route_hosts = read_jsonfile(path)
+    if not isinstance(route_hosts, list):
+        return None
+
+    return normalize_route_hosts(route_hosts)
+
+
+def fetch_node_traefik_route_hosts():
+    try:
+        traefik_agent_id = agent.resolve_agent_id("traefik@node")
+    except Exception as error:
+        raise RuntimeError(f"unable to resolve traefik@node: {error}") from error
+
+    if not traefik_agent_id:
+        raise RuntimeError("unable to resolve traefik@node")
+
+    try:
+        agent_tasks = importlib.import_module("agent.tasks")
+    except ImportError as error:
+        raise RuntimeError(f"unable to import agent.tasks: {error}") from error
+
+    try:
+        task_result = agent_tasks.run(
+            agent_id=traefik_agent_id,
+            action="list-routes",
+            data={"expand_list": True},
+        )
+    except Exception as error:
+        raise RuntimeError(f"traefik list-routes failed: {error}") from error
+
+    if not isinstance(task_result, dict):
+        raise RuntimeError("traefik list-routes returned an invalid response")
+
+    if task_result.get("exit_code") != 0:
+        error_message = task_result.get("error") or task_result.get("output") or "unknown error"
+        raise RuntimeError(f"traefik list-routes failed: {error_message}")
+
+    return extract_route_hosts(parse_task_output(task_result.get("output")))
+
+
+def sync_traefik_route_hosts(path=TRAEFIK_ROUTE_HOSTS_STATEFILE):
+    try:
+        route_hosts = fetch_node_traefik_route_hosts()
+    except Exception:
+        cached_route_hosts = read_cached_traefik_route_hosts(path)
+        if cached_route_hosts is not None:
+            return cached_route_hosts
+
+        route_hosts = []
+
+    write_jsonfile(path, route_hosts)
+    return route_hosts
 
 
 def render_agent_soul(agent_name, role):
@@ -1061,6 +1218,50 @@ def podman_run_hermes_config(agent_id, shared_environment, key, value):
             value,
         ]
     )
+
+
+def build_hermes_container_command(agent_id, shared_environment, publish=None, route_hosts=None):
+    publish = [value for value in (publish or []) if value]
+    route_hosts = normalize_route_hosts(route_hosts or read_cached_traefik_route_hosts() or [])
+
+    command = [
+        "podman",
+        "run",
+        "--name",
+        hermes_container_name(agent_id),
+        "--replace",
+        "--rm",
+        "--sdnotify=conmon",
+        "--cgroups=no-conmon",
+        "--network",
+        HERMES_CONTAINER_NETWORK,
+    ]
+    for publish_value in publish:
+        command.extend(["--publish", publish_value])
+
+    for route_host in route_hosts:
+        command.extend(["--add-host", f"{route_host}:{HERMES_ROUTE_HOST_GATEWAY}"])
+
+    command.extend(
+        [
+            "--volume",
+            f"{hermes_data_volume(agent_id)}:/opt/data:z",
+            "--env-file",
+            agent_envfile(agent_id),
+            "--env-file",
+            agent_secrets_envfile(agent_id),
+            "--tz",
+            shared_environment[TIMEZONE_ENV],
+            hermes_runtime_image(shared_environment),
+        ]
+    )
+    return command
+
+
+def run_hermes_container(agent_id, publish=None):
+    shared_environment = read_optional_envfile(ENVIRONMENT_FILE)
+    command = build_hermes_container_command(agent_id, shared_environment, publish=publish)
+    return run_command(command, check=False).returncode
 
 
 def sync_agent_llm_gateway_config(agent_data, shared_environment, system_agent_secrets):
@@ -1456,6 +1657,8 @@ def sync_agent_runtime_files(agent_id=None):
     shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
 
     write_envfile(SYSTEMD_ENVFILE, build_systemd_environment(shared_environment))
+    if agent_id is None or read_cached_traefik_route_hosts() is None:
+        sync_traefik_route_hosts()
 
     if agent_id is not None:
         filtered_agents = [item for item in agents if item["id"] == agent_id]

@@ -84,7 +84,8 @@ named volumes created by the runtime stay internal to the module and are not
 currently surfaced for NS8 additional-disk assignment.
 
 The current image requests one TCP port for the shared OpenViking localhost
-publish mapping and does not request Traefik route authorizations.
+publish mapping and requests `traefik@node:routeadm` so the runtime can list
+node-local Traefik routes for same-node host alias injection.
 
 ## Lifecycle Summary
 
@@ -98,7 +99,7 @@ add-module
   -> configure-module
        - validates and persists the agent roster in environment
        - discovers smarthost settings
-    - writes systemd.env, one shared OpenViking config, and the per-agent env and secrets files used during reconciliation
+     - writes systemd.env, one shared OpenViking config, one shared Traefik route-host cache, and the per-agent env and secrets files used during reconciliation
        - starts or stops per-agent systemd targets based on desired status
     - removes stopped or deleted agent runtime files, named volumes, and OpenViking tenant accounts
   -> module running

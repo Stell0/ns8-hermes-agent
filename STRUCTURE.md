@@ -11,7 +11,7 @@ Hermes manager components that are not yet present in the tree.
 - `OPENVIKING_RESOURCE_MAP.md`: OpenViking documentation index for tenant, server, and deployment behavior.
 - `README.md`: current project status and usage notes.
 - `STRUCTURE.md`: this file.
-- `build-images.sh`: builds the module image and the two wrapper images, and requests one NS8-managed TCP port for the module image.
+- `build-images.sh`: builds the module image and the two wrapper images, requests one NS8-managed TCP port for the module image, and declares Traefik route administration authorization for node-local route discovery.
 - `test-module.sh`: runs the Robot Framework module test.
 - `renovate.json`: Renovate configuration.
 
@@ -44,14 +44,15 @@ Hermes manager components that are not yet present in the tree.
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings, merges public values into `environment`, and writes `SMTP_PASSWORD` to `secrets.env`.
-- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generates role-specific `SOUL.md` files for started user-facing agents when safe to do so, and preserves one shared OpenViking root key, one reserved Hermes API key for the hidden system backend, per-agent tenant metadata, and Hermes-native config in each agent volume for agents that opt into the shared LLM gateway.
+- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, one shared `traefik-route-hosts.json`, and `systemd.env` from the stored configuration, generates role-specific `SOUL.md` files for started user-facing agents when safe to do so, and preserves one shared OpenViking root key, one reserved Hermes API key for the hidden system backend, per-agent tenant metadata, and Hermes-native config in each agent volume for agents that opt into the shared LLM gateway.
 - `ensure-openviking-tenant`: waits for the shared OpenViking service, provisions the per-agent account and user if needed, and writes the tenant API key to `agent-<id>_secrets.env`.
 - `start-agent-services`: reconciles the shared OpenViking service, the dedicated system Hermes backend service, and per-agent systemd targets after `configure-module`.
 - `reload-agent-services`: refreshes active agent targets after smarthost changes.
+- `run-hermes-container`: starts one Hermes container with `slirp4netns` host loopback enabled and one `--add-host ...:host-gateway` entry per cached Traefik route host.
 
 ### `imageroot/pypkg/`
 
-- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, hidden system-agent synthesis, role-specific SOUL rendering and safe seeding, shared embedding settings, runtime-file generation, Hermes config synchronization for opted-in agents, shared OpenViking provisioning, per-agent volume naming and cleanup, and systemd status checks.
+- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, hidden system-agent synthesis, role-specific SOUL rendering and safe seeding, shared embedding settings, Traefik route-host discovery and caching, runtime-file generation, Hermes config synchronization for opted-in agents, shared OpenViking provisioning, per-agent volume naming and cleanup, dynamic Hermes container argv construction, and systemd status checks.
 
 ### `imageroot/events/`
 
@@ -61,8 +62,8 @@ Hermes manager components that are not yet present in the tree.
 
 - `hermes-agent@.target`: per-agent umbrella target.
 - `hermes-agent-openviking.service`: runs the shared OpenViking container with one shared named data volume and one generated `ov.conf` bind mount.
-- `hermes-agent-hermes@.service`: runs the Hermes runtime container in gateway mode with the per-agent Hermes state volume mounted at `/opt/data`.
-- `hermes-agent-hermes-system.service`: runs the reserved always-on Hermes runtime that exposes the module-local API server consumed by shared OpenViking.
+- `hermes-agent-hermes@.service`: runs the Hermes runtime container in gateway mode through the `run-hermes-container` helper with the per-agent Hermes state volume mounted at `/opt/data`.
+- `hermes-agent-hermes-system.service`: runs the reserved always-on Hermes runtime through the `run-hermes-container` helper and exposes the module-local API server consumed by shared OpenViking.
 
 ## `containers/`
 

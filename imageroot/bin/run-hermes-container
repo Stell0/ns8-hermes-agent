@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+
+import argparse
+import importlib.util
+import sys
+from pathlib import Path
+
+RUNTIME_PATH = Path(__file__).resolve().parents[1] / "pypkg" / "hermes_agent_runtime.py"
+
+
+def load_runtime_module():
+    spec = importlib.util.spec_from_file_location("hermes_agent_runtime_cli", RUNTIME_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load runtime module from {RUNTIME_PATH}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run one Hermes container with generated route aliases")
+    parser.add_argument("--agent-id", type=int, required=True, help="Run one Hermes container")
+    parser.add_argument("--publish", action="append", default=[], help="Optional Podman publish mapping")
+    args = parser.parse_args()
+
+    runtime = load_runtime_module()
+    return runtime.run_hermes_container(args.agent_id, publish=args.publish)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

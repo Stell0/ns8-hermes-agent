@@ -13,7 +13,7 @@ This repository is therefore not a generic Hermes application or an upstream Ope
 
 ## Current code state
 
-- module image built by `build-images.sh` and labeled with two dependent wrapper images under `containers/`
+- module image built by `build-images.sh` and labeled with two dependent wrapper images under `containers/`, plus Traefik route administration authorization for node-local route discovery
 - custom actions: `create-module`, `configure-module`, `get-configuration`, and `destroy-module`
 - `configure-module` validates an `agents` payload, stores `AGENTS_LIST` in `environment`, synchronizes shared and per-agent runtime files, and reconciles per-agent systemd targets
 - the module now runs one shared rootless OpenViking container per module instance, while each started agent gets one rootless Hermes runtime container in gateway mode managed by its own systemd target
@@ -23,6 +23,7 @@ This repository is therefore not a generic Hermes application or an upstream Ope
 - the module image requests one NS8-managed TCP port at install time; `create-module` persists that allocation into `OPENVIKING_PORT` for the shared OpenViking localhost publish mapping and records the effective `TIMEZONE` for the shared runtime services
 - `get-configuration` returns the configured agents parsed from `AGENTS_LIST` and reports actual runtime status from systemd
 - smarthost discovery helper plus a `smarthost-changed` handler that refreshes active per-agent targets
+- runtime reconciliation now also reads node-local Traefik routes and injects matching host aliases into Hermes containers so same-node routed services avoid failing through public-IP resolution
 - embedded Vue 2 and Vue CLI admin UI with `status`, `settings`, and `about` views; `settings` now manages agents from the NS8 module UI
 - the current implementation does not publish an external HTTP route
 - Robot Framework tests under `tests/`
@@ -131,6 +132,7 @@ The above command will:
 - validate and store the agent roster in `environment`
 - persist the shared OpenViking embedding provider in `environment` and its API key in `secrets.env`
 - synchronize `systemd.env`, one shared `openviking.conf`, and per-agent `agent-<id>.env` and `agent-<id>_secrets.env` runtime files
+- synchronize one shared `traefik-route-hosts.json` cache used to inject `--add-host <route>:host-gateway` into Hermes startup
 - synchronize the reserved system Hermes runtime files `agent-0.env` and `agent-0_secrets.env`
 - seed `/opt/data/SOUL.md` for each started user-facing agent with a role-specific identity profile; if a later name or role change still finds the previous module-generated SOUL unchanged, the file is regenerated, otherwise customized SOUL content is preserved
 - prefer `hermes config set ...` inside each agent volume for Hermes-native model settings so opted-in agents keep `config.yaml` and `.env` aligned with the hidden shared gateway endpoint and key
@@ -141,6 +143,7 @@ The above command will:
 - provision the reserved system Hermes tenant so the always-on backend can use the shared OpenViking instance too
 - generate `systemd.env` with only the controlled image variables needed by systemd units, including the internal shared OpenViking host port
 - propagate the saved `TIMEZONE` into the shared OpenViking container and each Hermes container through the shipped user systemd units
+- start Hermes containers with `--network slirp4netns:allow_host_loopback=true` and one `--add-host <route>:host-gateway` entry for each concrete Traefik host discovered on the local node
 - rely on the NS8-allocated `TCP_PORT` copied to `OPENVIKING_PORT` during `create-module` instead of self-reserving the shared OpenViking publish port at runtime
 - start or stop the matching `hermes-agent@<id>.target` instances based on the saved status
 - keep `hermes-agent-hermes-system.service` running as the dedicated OpenViking VLM backend
@@ -204,8 +207,8 @@ Some settings are discovered from Redis rather than passed through the
 writes public SMTP settings into `environment` and `SMTP_PASSWORD` into
 `secrets.env`. The helper `imageroot/bin/sync-agent-runtime` then copies only
 the agent-specific runtime data into `agent-<id>.env` and
-`agent-<id>_secrets.env`, and writes one shared `openviking.conf` plus
-`systemd.env`. `OPENVIKING_PORT` and `TIMEZONE` are usually seeded earlier by
+`agent-<id>_secrets.env`, writes one shared `openviking.conf`, one shared
+`traefik-route-hosts.json`, and `systemd.env`. `OPENVIKING_PORT` and `TIMEZONE` are usually seeded earlier by
 `create-module`; runtime reconciliation primarily consumes those persisted
 values and backfills them when legacy state is missing. The generated per-agent
 files include the shared OpenViking
@@ -216,6 +219,11 @@ also gets `API_SERVER_ENABLED`, `API_SERVER_HOST`, `API_SERVER_PORT`, and a
 generated `API_SERVER_KEY` so OpenViking can use it as an OpenAI-compatible
 backend. The shared `secrets.env` keeps `OPENVIKING_ROOT_API_KEY`, the shared
 embedding API key, and `SMTP_PASSWORD`.
+When Traefik route lookup succeeds, the Hermes startup helper uses the cached
+host list to add concrete same-node route aliases through Podman `--add-host`
+entries. If route lookup is temporarily unavailable, the runtime keeps using the
+last generated cache when present and otherwise starts Hermes without those
+extra aliases.
 The event handler
 `imageroot/events/smarthost-changed/10reload_services` refreshes active agent
 targets when cluster smarthost settings change.
