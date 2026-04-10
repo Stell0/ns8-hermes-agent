@@ -11,8 +11,6 @@ The module handles the NS8-specific work needed to make that usable in productio
 
 This repository is therefore not a generic Hermes application or an upstream OpenViking deployment. It is the integration layer that ties them together for NethServer 8, with the current checked-in tree as the source of truth.
 
-Older docs in this repository may still describe a larger Hermes manager architecture. When in doubt, follow the current implementation described below.
-
 ## Current code state
 
 - module image built by `build-images.sh` and labeled with two dependent wrapper images under `containers/`
@@ -22,7 +20,7 @@ Older docs in this repository may still describe a larger Hermes manager archite
 - the module also keeps one reserved always-on Hermes runtime for the shared OpenViking backend; it is backend-managed, hidden from the UI, and not removable through normal agent operations
 - each started agent gets one internal named Podman volume mounted at Hermes `/opt/data`, and the module also keeps one shared OpenViking named volume mounted at `/app/data` for the shared multi-tenant OpenViking server
 - those named volumes are internal to the module for now; the image does not yet declare `org.nethserver.volumes` for NS8 disk-placement integration
-- the module image requests one NS8-managed TCP port at install time; `create-module` persists that allocation into `OPENVIKING_PORT` for the shared OpenViking localhost publish mapping
+- the module image requests one NS8-managed TCP port at install time; `create-module` persists that allocation into `OPENVIKING_PORT` for the shared OpenViking localhost publish mapping and records the effective `TIMEZONE` for the shared runtime services
 - `get-configuration` returns the configured agents parsed from `AGENTS_LIST` and reports actual runtime status from systemd
 - smarthost discovery helper plus a `smarthost-changed` handler that refreshes active per-agent targets
 - embedded Vue 2 and Vue CLI admin UI with `status`, `settings`, and `about` views; `settings` now manages agents from the NS8 module UI
@@ -92,7 +90,9 @@ path from the older split Hermes plus gateway runtime is shipped in this tree.
 Fresh installs receive one NS8-allocated `TCP_PORT`. The module copies that
 value into `OPENVIKING_PORT` during `create-module` so the shared OpenViking
 service keeps a stable module-local environment contract while NS8 owns the
-actual port reservation. During later runtime reconciliation, the module will
+actual port reservation. The same install step also records the effective
+`TIMEZONE` so the shared OpenViking container and all Hermes containers use the
+same timezone setting. During later runtime reconciliation, the module will
 also repair a missing `OPENVIKING_PORT` from `TCP_PORT` once if needed.
 
 ## Configure
@@ -109,7 +109,7 @@ Each user-facing agent contains:
 
 - `id`: integer starting from `1`
 - `name`: user-defined string with allowed characters `[A-Za-z ]`
-- `role`: one of `default` or `developer`
+- `role`: one of `default`, `developer`, `marketing`, `sales`, `customer_support`, `social_media_manager`, `business_consultant`, or `researcher`
 - `status`: one of `start` or `stop`; it is persisted and used to decide whether
     the per-agent systemd target should be running
 - `use_default_gateway_for_llm`: boolean; when `true`, the agent runtime is
@@ -132,6 +132,7 @@ The above command will:
 - persist the shared OpenViking embedding provider in `environment` and its API key in `secrets.env`
 - synchronize `systemd.env`, one shared `openviking.conf`, and per-agent `agent-<id>.env` and `agent-<id>_secrets.env` runtime files
 - synchronize the reserved system Hermes runtime files `agent-0.env` and `agent-0_secrets.env`
+- seed `/opt/data/SOUL.md` for each started user-facing agent with a role-specific identity profile; if a later name or role change still finds the previous module-generated SOUL unchanged, the file is regenerated, otherwise customized SOUL content is preserved
 - prefer `hermes config set ...` inside each agent volume for Hermes-native model settings so opted-in agents keep `config.yaml` and `.env` aligned with the hidden shared gateway endpoint and key
 - remove per-agent runtime files for stopped or deleted agents
 - generate and preserve one shared `OPENVIKING_ROOT_API_KEY` in `secrets.env`
@@ -139,6 +140,7 @@ The above command will:
 - provision one OpenViking account and admin user per started agent and store that tenant user key as `OPENVIKING_API_KEY` in `agent-<id>_secrets.env`
 - provision the reserved system Hermes tenant so the always-on backend can use the shared OpenViking instance too
 - generate `systemd.env` with only the controlled image variables needed by systemd units, including the internal shared OpenViking host port
+- propagate the saved `TIMEZONE` into the shared OpenViking container and each Hermes container through the shipped user systemd units
 - rely on the NS8-allocated `TCP_PORT` copied to `OPENVIKING_PORT` during `create-module` instead of self-reserving the shared OpenViking publish port at runtime
 - start or stop the matching `hermes-agent@<id>.target` instances based on the saved status
 - keep `hermes-agent-hermes-system.service` running as the dedicated OpenViking VLM backend
@@ -203,9 +205,10 @@ writes public SMTP settings into `environment` and `SMTP_PASSWORD` into
 `secrets.env`. The helper `imageroot/bin/sync-agent-runtime` then copies only
 the agent-specific runtime data into `agent-<id>.env` and
 `agent-<id>_secrets.env`, and writes one shared `openviking.conf` plus
-`systemd.env`. `OPENVIKING_PORT` is seeded earlier by `create-module` from the
-NS8-managed `TCP_PORT`, so runtime reconciliation only consumes that persisted
-value. The generated per-agent files include the shared OpenViking
+`systemd.env`. `OPENVIKING_PORT` and `TIMEZONE` are usually seeded earlier by
+`create-module`; runtime reconciliation primarily consumes those persisted
+values and backfills them when legacy state is missing. The generated per-agent
+files include the shared OpenViking
 endpoint plus tenant-scoped `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and
 `OPENVIKING_AGENT_ID` values in `agent-<id>.env`, and the matching tenant
 `OPENVIKING_API_KEY` in `agent-<id>_secrets.env`. The reserved system backend

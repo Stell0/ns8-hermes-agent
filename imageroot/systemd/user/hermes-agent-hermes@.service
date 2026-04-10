@@ -25,6 +25,7 @@ ExecStart=/usr/bin/podman run \
     --volume hermes-agent-hermes-data-%i:/opt/data:z \
     --env-file %S/state/agent-%i.env \
     --env-file %S/state/agent-%i_secrets.env \
+    --tz=${TIMEZONE} \
     ${HERMES_AGENT_HERMES_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-hermes-%i
 ExecStopPost=-/usr/bin/podman rm --force hermes-agent-hermes-%i

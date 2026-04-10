@@ -272,11 +272,8 @@
             ref="createAgentRole"
             class="mg-bottom-lg"
           >
-            <cv-select-option value="default">
-              {{ $t("settings.role_default") }}
-            </cv-select-option>
-            <cv-select-option value="developer">
-              {{ $t("settings.role_developer") }}
+            <cv-select-option v-for="role in roles" :key="`create-${role}`" :value="role">
+              {{ roleLabel(role) }}
             </cv-select-option>
           </cv-select>
           <div class="gateway-checkbox mg-bottom-lg">
@@ -338,11 +335,8 @@
             ref="editAgentRole"
             class="mg-bottom-lg"
           >
-            <cv-select-option value="default">
-              {{ $t("settings.role_default") }}
-            </cv-select-option>
-            <cv-select-option value="developer">
-              {{ $t("settings.role_developer") }}
+            <cv-select-option v-for="role in roles" :key="`edit-${role}`" :value="role">
+              {{ roleLabel(role) }}
             </cv-select-option>
           </cv-select>
           <div class="gateway-checkbox mg-bottom-lg">
@@ -447,7 +441,16 @@ export default {
         page: "settings",
       },
       urlCheckInterval: null,
-      roles: ["default", "developer"],
+      roles: [
+        "default",
+        "developer",
+        "marketing",
+        "sales",
+        "customer_support",
+        "social_media_manager",
+        "business_consultant",
+        "researcher",
+      ],
       openviking: this.defaultOpenVikingState(),
       loadedOpenViking: this.defaultOpenVikingState(),
       agents: [],

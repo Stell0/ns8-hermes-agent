@@ -19,6 +19,7 @@ ExecStart=/usr/bin/podman run \
     --publish 127.0.0.1:${OPENVIKING_PORT}:1933 \
     --volume hermes-agent-openviking-data:/app/data:z \
     --volume %S/state/openviking.conf:/app/ov.conf:z \
+    --tz=${TIMEZONE} \
     ${HERMES_AGENT_OPENVIKING_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-openviking
 ExecStopPost=-/usr/bin/podman rm --force hermes-agent-openviking

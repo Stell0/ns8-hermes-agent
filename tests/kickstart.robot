@@ -13,7 +13,7 @@ Check if hermes-agent is installed correctly
     Set Suite Variable    ${module_home}    ${module_home}
 
 Check if hermes-agent can be configured with mixed agent states
-    ${configure_payload} =    Set Variable    {"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"},{"id":2,"name":"Alice User","role":"default","status":"stop"}],"openviking":{"embedding":{"provider":"jina","api_key":"test-embedding-key"}}}
+    ${configure_payload} =    Set Variable    {"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"},{"id":2,"name":"Alice User","role":"marketing","status":"stop"}],"openviking":{"embedding":{"provider":"jina","api_key":"test-embedding-key"}}}
     ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}  0
@@ -111,7 +111,7 @@ Check if hermes-agent returns actual agent states and tenant metadata
     Should Not Be Empty    ${agent1_user}
     Should Not Be Empty    ${agent1_agent_id}
     Should Be Equal    ${agent2_name}  Alice User
-    Should Be Equal    ${agent2_role}  default
+    Should Be Equal    ${agent2_role}  marketing
     Should Be Equal    ${agent2_status}  stop
     Should Not Be Empty    ${agent2_account}
     Should Not Be Empty    ${agent2_user}
@@ -162,6 +162,11 @@ Check if hermes-agent starts one shared OpenViking service and one runtime per r
     Should Be Equal    ${system_hermes_output}  active
     Should Be Equal    ${hermes_output}  active
 
+Check if hermes-agent seeds SOUL for the running developer agent
+    ${agent1_soul} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-hermes-1 sh -lc "cat /opt/data/SOUL.md"'
+    Should Contain    ${agent1_soul}    - Your name is Foo Bar, you are an Hermes Agent that runs on NethServer8
+    Should Contain    ${agent1_soul}    pragmatic technical partner
+
 Check if hermes-agent creates persistent volumes and keeps data across restart
     ${system_hermes_volume_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume exists hermes-agent-hermes-data-0'
     ...    return_rc=True  return_stdout=False
@@ -204,13 +209,14 @@ Check if hermes-agent keeps stopped agents inactive
     Should Be Equal    ${target2_output}  inactive
 
 Check if hermes-agent can start a second agent on the shared OpenViking instance
-    ${configure_payload} =    Set Variable    {"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"},{"id":2,"name":"Alice User","role":"default","status":"start"}],"openviking":{"embedding":{"provider":"jina"}}}
+    ${configure_payload} =    Set Variable    {"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"},{"id":2,"name":"Alice User","role":"marketing","status":"start"}],"openviking":{"embedding":{"provider":"jina"}}}
     ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}  0
     ${agent2_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent-2.env' -print -quit
     ${agent2_secrets} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent-2_secrets.env' -print -quit
     ${agent2_openviking_key} =    Execute Command    grep '^OPENVIKING_API_KEY=' ${agent2_secrets} | cut -d= -f2-
+    ${agent2_soul} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-agent-hermes-2 sh -lc "cat /opt/data/SOUL.md"'
     ${target2_output}  ${target2_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent@2.target'
     ...    return_rc=True
     ${shared_openviking_output}  ${shared_openviking_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent-openviking.service'
@@ -221,6 +227,8 @@ Check if hermes-agent can start a second agent on the shared OpenViking instance
     Should Not Be Empty    ${agent2_secrets}
     Should Not Be Empty    ${agent2_openviking_key}
     Should Not Be Equal    ${agent1_openviking_key}  ${agent2_openviking_key}
+    Should Contain    ${agent2_soul}    - Your name is Alice User, you are an Hermes Agent that runs on NethServer8
+    Should Contain    ${agent2_soul}    sharp marketing strategist
     Should Be Equal As Integers    ${target2_rc}  0
     Should Be Equal As Integers    ${shared_openviking_rc}  0
     Should Be Equal As Integers    ${runtime2_exists_rc}  0
@@ -249,7 +257,7 @@ Check if shared OpenViking keeps agent accounts isolated
     Should Not Be Equal As Integers    ${agent2_other_users_rc}  0
 
 Check if hermes-agent cleans removed agents and keeps shared OpenViking accounts in sync
-    ${configure_payload} =    Set Variable    {"agents":[{"id":2,"name":"Alice User","role":"default","status":"start"}],"openviking":{"embedding":{"provider":"volcengine","api_key":"rotated-embedding-key"}}}
+    ${configure_payload} =    Set Variable    {"agents":[{"id":2,"name":"Alice User","role":"marketing","status":"start"}],"openviking":{"embedding":{"provider":"volcengine","api_key":"rotated-embedding-key"}}}
     ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}  0

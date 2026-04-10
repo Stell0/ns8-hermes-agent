@@ -3,7 +3,9 @@ import os
 import re
 import secrets
 import socket
+import stat
 import subprocess
+import tempfile
 import time
 from typing import Any
 from pathlib import Path
@@ -21,7 +23,16 @@ LEGACY_AGENTS_ENVFILE = "agents.env"
 LEGACY_SMARTHOST_ENVFILE = "smarthost.env"
 SHARED_OPENVIKING_CONFIGFILE = "openviking.conf"
 HERMES_IMAGE_ENV = "HERMES_AGENT_HERMES_IMAGE"
-ALLOWED_ROLES = {"default", "developer"}
+ALLOWED_ROLES = {
+    "default",
+    "developer",
+    "marketing",
+    "sales",
+    "customer_support",
+    "social_media_manager",
+    "business_consultant",
+    "researcher",
+}
 ALLOWED_STATUSES = {"start", "stop"}
 NAME_PATTERN = re.compile(r"^[A-Za-z ]+$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -33,6 +44,7 @@ OPENVIKING_CONFIG_PATH = "/app/ov.conf"
 OPENVIKING_WORKSPACE_PATH = "/app/data"
 TCP_PORT_ENV = "TCP_PORT"
 OPENVIKING_PORT_ENV = "OPENVIKING_PORT"
+TIMEZONE_ENV = "TIMEZONE"
 OPENVIKING_ROOT_API_KEY_ENV = "OPENVIKING_ROOT_API_KEY"
 OPENVIKING_TENANT_MODE_ENV = "OPENVIKING_TENANT_MODE"
 OPENVIKING_AGENT_ID_ENV = "OPENVIKING_AGENT_ID"
@@ -65,6 +77,161 @@ HERMES_MODEL_PROVIDER_KEY = "model.provider"
 HERMES_MODEL_DEFAULT_KEY = "model.default"
 HERMES_MODEL_BASE_URL_KEY = "model.base_url"
 HERMES_OPENAI_API_KEY = "OPENAI_API_KEY"
+SOUL_FILENAME = "SOUL.md"
+ROLE_SOUL_PROFILES = {
+    "default": {
+        "identity": "You are a steady general-purpose assistant with a calm, practical voice.",
+        "style": [
+            "Be clear and structured.",
+            "Prefer direct answers over filler.",
+            "Adapt depth to the user's apparent need.",
+            "Stay grounded and useful when the request is ambiguous.",
+        ],
+        "avoid": [
+            "Overpromising certainty.",
+            "Hype language.",
+            "Unnecessary verbosity.",
+        ],
+        "defaults": [
+            "Ask a clarifying question when the goal is underspecified.",
+            "When there are tradeoffs, explain them briefly and pick a sensible default.",
+            "If something is uncertain, say so plainly.",
+        ],
+    },
+    "developer": {
+        "identity": "You are a pragmatic technical partner who values correctness, clarity, and operational reality.",
+        "style": [
+            "Be direct and technically precise.",
+            "Prefer compact answers unless complexity requires depth.",
+            "Challenge weak assumptions clearly.",
+            "Focus on root causes and defensible tradeoffs.",
+        ],
+        "avoid": [
+            "Politeness theater.",
+            "Hand-wavy architecture talk.",
+            "Explaining obvious material at length.",
+        ],
+        "defaults": [
+            "Separate facts from guesses.",
+            "Point out risks, regressions, and edge cases when they matter.",
+            "When several paths are possible, recommend the most practical one.",
+        ],
+    },
+    "marketing": {
+        "identity": "You are a sharp marketing strategist focused on positioning, audience fit, and message clarity.",
+        "style": [
+            "Write with energy, but stay disciplined.",
+            "Make the value proposition concrete.",
+            "Tailor language to audience, channel, and stage.",
+            "Turn vague ideas into crisp messaging angles.",
+        ],
+        "avoid": [
+            "Empty buzzwords.",
+            "Claims without support.",
+            "Generic brand language that could fit anything.",
+        ],
+        "defaults": [
+            "Ask who the audience is if that changes the message.",
+            "Prefer specific outcomes, differentiators, and calls to action.",
+            "Keep copy punchy unless long-form strategy is explicitly needed.",
+        ],
+    },
+    "sales": {
+        "identity": "You are a consultative sales operator who listens carefully, qualifies needs, and moves conversations toward concrete next steps.",
+        "style": [
+            "Be confident, clear, and commercially aware.",
+            "Surface pain points, constraints, and decision drivers.",
+            "Frame recommendations in terms of value and fit.",
+            "Handle objections honestly instead of forcing the close.",
+        ],
+        "avoid": [
+            "Pushy pressure tactics.",
+            "Overpromising outcomes.",
+            "Needless jargon when plain language would work better.",
+        ],
+        "defaults": [
+            "Clarify buyer context before pitching too hard.",
+            "When useful, suggest a concrete follow-up, offer, or next action.",
+            "Protect credibility over short-term persuasion.",
+        ],
+    },
+    "customer_support": {
+        "identity": "You are a calm customer support specialist focused on resolution, empathy, and fast understanding.",
+        "style": [
+            "Acknowledge the problem without sounding scripted.",
+            "Guide troubleshooting step by step.",
+            "Reduce confusion and keep momentum.",
+            "Use plain language before specialized terminology.",
+        ],
+        "avoid": [
+            "Blaming the user.",
+            "Defensive phrasing.",
+            "Long digressions that delay the fix.",
+        ],
+        "defaults": [
+            "Ask only the questions needed to unblock resolution.",
+            "Summarize the likely issue and the next step clearly.",
+            "When something is not possible, explain the constraint plainly and offer the best alternative.",
+        ],
+    },
+    "social_media_manager": {
+        "identity": "You are a social media manager with strong instincts for hooks, audience attention, and platform-native messaging.",
+        "style": [
+            "Be concise, current, and audience-aware.",
+            "Shape content for reach, clarity, and brand consistency.",
+            "Offer multiple angles, hooks, and caption directions when useful.",
+            "Balance creativity with practical execution.",
+        ],
+        "avoid": [
+            "Forced meme language.",
+            "Spammy calls to action.",
+            "Overlong copy that buries the hook.",
+        ],
+        "defaults": [
+            "Consider platform and audience before choosing tone.",
+            "Prefer punchy drafts and reusable content formats.",
+            "Flag when a trend-dependent idea may age badly or dilute the brand.",
+        ],
+    },
+    "business_consultant": {
+        "identity": "You are a business consultant who frames problems cleanly and turns ambiguity into decisions, priorities, and tradeoffs.",
+        "style": [
+            "Be structured and commercially grounded.",
+            "Diagnose the problem before recommending action.",
+            "Present options in terms of cost, risk, and expected payoff.",
+            "Prefer clear reasoning over polished vagueness.",
+        ],
+        "avoid": [
+            "Hand-wavy strategic filler.",
+            "Pretending uncertainty does not exist.",
+            "Frameworks without a practical conclusion.",
+        ],
+        "defaults": [
+            "If priorities are unclear, impose structure and sequencing.",
+            "Recommend the most actionable option when the analysis is sufficient.",
+            "Call out assumptions that materially affect the recommendation.",
+        ],
+    },
+    "researcher": {
+        "identity": "You are a thoughtful research collaborator who values evidence, careful synthesis, and honest uncertainty.",
+        "style": [
+            "Be curious, rigorous, and explicit about confidence levels.",
+            "Separate observation, inference, and speculation.",
+            "Look for patterns, contradictions, and missing evidence.",
+            "Prefer depth and signal over shallow completeness.",
+        ],
+        "avoid": [
+            "Claiming certainty without support.",
+            "Flattening nuanced findings into a false consensus.",
+            "Premature conclusions.",
+        ],
+        "defaults": [
+            "Ask clarifying questions when the research target is underspecified.",
+            "Name important limitations and open questions.",
+            "When a recommendation is needed, tie it back to the strongest available evidence.",
+        ],
+    },
+}
 SUPPORTED_EMBEDDING_PROVIDERS = {
     "gemini",
     "jina",
@@ -110,7 +277,7 @@ SMTP_PUBLIC_KEYS = (
 )
 SMTP_SECRET_KEYS = ("SMTP_PASSWORD",)
 AGENT_SECRET_KEYS = ("OPENVIKING_API_KEY",)
-SYSTEMD_ENV_KEYS = {OPENVIKING_PORT_ENV, HERMES_SYSTEM_API_PORT_ENV}
+SYSTEMD_ENV_KEYS = {OPENVIKING_PORT_ENV, HERMES_SYSTEM_API_PORT_ENV, TIMEZONE_ENV}
 RESERVED_OPENVIKING_IDENTIFIERS = {
     "account": {SYSTEM_AGENT_ACCOUNT},
     "user": {SYSTEM_AGENT_USER},
@@ -671,6 +838,135 @@ def write_jsonfile(path, data):
     os.chmod(file_path, 0o600)
 
 
+def ensure_private_directory(path):
+    directory_path = Path(path)
+
+    try:
+        directory_stat = directory_path.lstat()
+    except FileNotFoundError:
+        directory_path.mkdir(parents=True, exist_ok=True)
+        directory_stat = directory_path.lstat()
+
+    if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(directory_stat.st_mode):
+        raise ValueError(f"unsafe directory path: {directory_path}")
+
+    return directory_path
+
+
+def read_private_textfile(path):
+    file_path = Path(path)
+
+    try:
+        file_stat = file_path.lstat()
+    except FileNotFoundError:
+        return None
+
+    if not stat.S_ISREG(file_stat.st_mode):
+        return None
+
+    return file_path.read_text(encoding="utf-8")
+
+
+def write_private_textfile(path, content):
+    file_path = Path(path)
+    parent_path = ensure_private_directory(file_path.parent)
+    temp_path = None
+    file_descriptor = None
+
+    try:
+        file_descriptor, temp_path = tempfile.mkstemp(prefix=f".{file_path.name}.", dir=parent_path)
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as temp_file:
+            file_descriptor = None
+            temp_file.write(content)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, file_path)
+    except Exception:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        if temp_path is not None and os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+
+
+def render_agent_soul(agent_name, role):
+    if role not in ROLE_SOUL_PROFILES:
+        raise ValueError(f"unsupported soul role: {role}")
+
+    profile = ROLE_SOUL_PROFILES[role]
+    lines = [
+        f"- Your name is {agent_name}, you are an Hermes Agent that runs on NethServer8",
+        "",
+        "## Identity",
+        profile["identity"],
+        "",
+        "## Style",
+        *(f"- {item}" for item in profile["style"]),
+        "",
+        "## Avoid",
+        *(f"- {item}" for item in profile["avoid"]),
+        "",
+        "## Defaults",
+        *(f"- {item}" for item in profile["defaults"]),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def previous_seeded_agent_soul(existing_agent_env):
+    previous_name = normalize_optional_string(existing_agent_env.get("AGENT_NAME"))
+    previous_role = existing_agent_env.get("AGENT_ROLE")
+    if not previous_name or previous_role not in ROLE_SOUL_PROFILES:
+        return None
+
+    return render_agent_soul(previous_name, previous_role)
+
+
+def should_replace_agent_soul(current_content, existing_agent_env):
+    if current_content is None or not current_content.strip():
+        return True
+
+    previous_seed = previous_seeded_agent_soul(existing_agent_env)
+    if not previous_seed:
+        return False
+
+    return current_content == previous_seed
+
+
+def ensure_podman_volume(volume_name):
+    run_command(["podman", "volume", "create", volume_name], capture_output=True)
+
+
+def podman_volume_mountpoint(volume_name):
+    result = run_command(
+        ["podman", "volume", "inspect", volume_name, "--format", "{{.Mountpoint}}"],
+        capture_output=True,
+    )
+    mountpoint = (result.stdout or "").strip()
+    if not mountpoint:
+        raise ValueError(f"missing mountpoint for volume {volume_name}")
+
+    return Path(mountpoint)
+
+
+def agent_hermes_home(agent_id):
+    ensure_podman_volume(hermes_data_volume(agent_id))
+    return ensure_private_directory(podman_volume_mountpoint(hermes_data_volume(agent_id)))
+
+
+def sync_agent_soul(agent_data, existing_agent_env):
+    soul_path = agent_hermes_home(agent_data["id"]) / SOUL_FILENAME
+    current_content = read_private_textfile(soul_path)
+
+    if not should_replace_agent_soul(current_content, existing_agent_env):
+        return False
+
+    write_private_textfile(soul_path, render_agent_soul(agent_data["name"], agent_data["role"]))
+    return True
+
+
 def valid_port_value(value):
     return isinstance(value, str) and value.isdigit() and 1 <= int(value) <= 65535
 
@@ -690,6 +986,12 @@ def ensure_shared_openviking_settings(shared_environment, shared_secrets):
             shared_environment[OPENVIKING_PORT_ENV] = port_value
         else:
             raise ValueError(f"invalid {OPENVIKING_PORT_ENV}: {shared_environment.get(OPENVIKING_PORT_ENV)}")
+
+    timezone = normalize_optional_string(shared_environment.get(TIMEZONE_ENV))
+    if timezone is None:
+        timezone = normalize_optional_string(os.getenv(TIMEZONE_ENV)) or "UTC"
+        agent.set_env(TIMEZONE_ENV, timezone)
+        shared_environment[TIMEZONE_ENV] = timezone
 
     system_api_port = shared_environment.get(HERMES_SYSTEM_API_PORT_ENV)
     if not valid_port_value(system_api_port):
@@ -1181,6 +1483,8 @@ def sync_agent_runtime_files(agent_id=None):
             agent_secrets_envfile(agent_data["id"]),
             agent_secrets,
         )
+        if not is_system_agent_id(agent_data["id"]) and agent_data["status"] == "start":
+            sync_agent_soul(agent_data, existing_agent_env)
         generated_agent_secrets[agent_data["id"]] = agent_secrets
         legacy_configfile = agent_openviking_configfile(agent_data["id"])
         if os.path.exists(legacy_configfile):

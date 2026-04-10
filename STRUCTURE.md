@@ -33,7 +33,7 @@ Hermes manager components that are not yet present in the tree.
 
 ### `imageroot/actions/`
 
-- `create-module/20create`: validates the NS8-provided `TCP_PORT` and persists it to `OPENVIKING_PORT` in `environment` for the shared OpenViking service.
+- `create-module/20create`: validates the NS8-provided `TCP_PORT`, persists it to `OPENVIKING_PORT`, and records the effective `TIMEZONE` in `environment` for the shared runtime services.
 - `configure-module/20configure`: validates the user-facing `agents` payload plus shared `openviking` settings, persists `AGENTS_LIST`, and stores the shared embedding provider and secret.
 - `configure-module/80start_services`: shell wrapper that delegates per-agent runtime reconciliation to `start-agent-services`.
 - `configure-module/validate-input.json`: input schema for `configure-module`, including agent validation and the per-agent `use_default_gateway_for_llm` flag.
@@ -44,14 +44,14 @@ Hermes manager components that are not yet present in the tree.
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings, merges public values into `environment`, and writes `SMTP_PASSWORD` to `secrets.env`.
-- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generating and preserving one shared OpenViking root key, one reserved Hermes API key for the hidden system backend, per-agent tenant metadata, and Hermes-native config in each agent volume for agents that opt into the shared LLM gateway.
+- `sync-agent-runtime`: writes `agent-<id>.env`, `agent-<id>_secrets.env`, one shared `openviking.conf`, and `systemd.env` from the stored configuration, generates role-specific `SOUL.md` files for started user-facing agents when safe to do so, and preserves one shared OpenViking root key, one reserved Hermes API key for the hidden system backend, per-agent tenant metadata, and Hermes-native config in each agent volume for agents that opt into the shared LLM gateway.
 - `ensure-openviking-tenant`: waits for the shared OpenViking service, provisions the per-agent account and user if needed, and writes the tenant API key to `agent-<id>_secrets.env`.
 - `start-agent-services`: reconciles the shared OpenViking service, the dedicated system Hermes backend service, and per-agent systemd targets after `configure-module`.
 - `reload-agent-services`: refreshes active agent targets after smarthost changes.
 
 ### `imageroot/pypkg/`
 
-- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, hidden system-agent synthesis, shared embedding settings, runtime-file generation, Hermes config synchronization for opted-in agents, shared OpenViking provisioning, per-agent volume naming and cleanup, and systemd status checks.
+- `hermes_agent_runtime.py`: shared runtime helpers for validation, `AGENTS_LIST` parsing, hidden system-agent synthesis, role-specific SOUL rendering and safe seeding, shared embedding settings, runtime-file generation, Hermes config synchronization for opted-in agents, shared OpenViking provisioning, per-agent volume naming and cleanup, and systemd status checks.
 
 ### `imageroot/events/`
 

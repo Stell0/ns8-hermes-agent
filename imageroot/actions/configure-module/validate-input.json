@@ -32,7 +32,13 @@
                         "type": "string",
                         "enum": [
                             "default",
-                            "developer"
+                            "developer",
+                            "marketing",
+                            "sales",
+                            "customer_support",
+                            "social_media_manager",
+                            "business_consultant",
+                            "researcher"
                         ]
                     },
                     "status": {

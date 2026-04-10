@@ -94,6 +94,7 @@ add-module
        - pulls the module image and the wrapper images
        - installs imageroot and UI assets
     - persists NS8 `TCP_PORT` into `OPENVIKING_PORT`
+    - records the effective `TIMEZONE` for the shared runtime services
   -> configure-module
        - validates and persists the agent roster in environment
        - discovers smarthost settings
@@ -117,7 +118,7 @@ add-module
 
 | Step | File | Purpose |
 |------|------|---------|
-| 20 | `20create` | Validates the NS8-provided `TCP_PORT` and persists it as `OPENVIKING_PORT` in `environment` for the shared OpenViking service. |
+| 20 | `20create` | Validates the NS8-provided `TCP_PORT`, persists it as `OPENVIKING_PORT`, and records the effective `TIMEZONE` in `environment` for the shared runtime services. |
 
 If an existing instance already has `TCP_PORT` but lacks `OPENVIKING_PORT`,
 runtime reconciliation backfills the alias once before starting services.
@@ -152,11 +153,16 @@ Each agent must contain:
 
 - `id`: integer greater than or equal to `1`
 - `name`: non-empty string matching `^[A-Za-z ]+$`
-- `role`: `default` or `developer`
+- `role`: `default`, `developer`, `marketing`, `sales`, `customer_support`, `social_media_manager`, `business_consultant`, or `researcher`
 - `status`: `start` or `stop`
 - `use_default_gateway_for_llm`: boolean; when `true`, the agent is configured
   to use the module's hidden shared Hermes API gateway as its main LLM endpoint
 - optional hidden backend fields `account`, `user`, and `agent_id`: auto-generated today and persisted so future UI work can expose them explicitly
+
+For each started user-facing agent, the module also seeds `/opt/data/SOUL.md`
+with a role-specific identity profile. If the agent name or role changes later,
+the module regenerates that file only when the existing content still matches
+the previous module-generated seed; customized SOUL content is preserved.
 
 Steps:
 
@@ -266,7 +272,7 @@ path from the older split Hermes plus gateway runtime is implemented here.
 The module runtime uses these state files:
 
 - `environment`: shared NS8 state; stores `AGENTS_LIST` and public smarthost
-  settings plus the NS8-allocated `OPENVIKING_PORT` alias and reserved Hermes API publish port
+  settings plus the NS8-allocated `OPENVIKING_PORT` alias, the effective `TIMEZONE`, and the reserved Hermes API publish port
 - `secrets.env`: shared sensitive values such as `SMTP_PASSWORD`, the shared `OPENVIKING_ROOT_API_KEY`, and the shared OpenViking embedding API key
 - `systemd.env`: generated controlled subset of environment values used only by
   systemd units
@@ -304,7 +310,9 @@ This helper:
 
 - reads the stored agent roster
 - writes `systemd.env` from controlled image variables plus the create-module-persisted OpenViking port and reserved Hermes API publish port
+- passes through the saved `TIMEZONE` from `environment` so the shared OpenViking and Hermes containers run with the same timezone
 - writes `agent-<id>.env`, `agent-<id>_secrets.env`, and `openviking.conf`
+- seeds `/opt/data/SOUL.md` for started user-facing agents using the selected role profile, while preserving customized files that no longer match the last module-generated seed
 - runs `hermes config set ...` inside each opted-in agent volume so Hermes-native
   `config.yaml` and `.env` stay aligned with the hidden shared gateway endpoint
   and key when `use_default_gateway_for_llm` is enabled

@@ -13,4 +13,7 @@ tcp_port = os.environ.get("TCP_PORT")
 if not (isinstance(tcp_port, str) and tcp_port.isdigit() and 1 <= int(tcp_port) <= 65535):
     raise ValueError(f"invalid TCP_PORT: {tcp_port}")
 
+timezone = (os.getenv("TIMEZONE") or "UTC").strip() or "UTC"
+
 agent.set_env("OPENVIKING_PORT", tcp_port)
+agent.set_env("TIMEZONE", timezone)
