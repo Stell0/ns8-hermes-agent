@@ -2,15 +2,49 @@
 
 `ns8-hermes-agent` is an NS8 module that manages one or more Hermes Agent runtimes.
 
+## Quickstart
+
+Install the module with
+
+```bash
+add-module ghcr.io/Stell0/ns8-hermes-agent:latest 1
+```
+Configure at least one agent from the UI or with:
+
+```bash
+api-cli run module/hermes-agent1/configure-module --data '{"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}]}'
+```
+
+Configure the LLM provider from Hermes console
+```bash
+runagent -m hermes-agent1 podman exec -it hermes-agent-1 hermes setup
+```
+
+Configure a messaging platform like Telegram from Hermes console
+```bash
+runagent -m hermes-agent1 podman exec -it hermes-agent-1 hermes gateway setup
+```
+When you are done, exit the console and restart the agent to pick up the new configuration:
+
+```bash
+runagent -m hermes-agent1 podman exec -it hermes-agent-1 hermes gateway stop
+```
+
+## Accessing the agent console
+You can access the Hermes console for an agent with:
+
+```bash
+runagent -m hermes-agent1 podman exec -it hermes-agent-1 hermes
+```
+
+## Repository guidelines
+
 The current implementation is intentionally small:
 
-- Hermes only. OpenViking is gone.
-- No hidden backend runtime and no reserved `agent-0`.
+- Hermes only.
 - One configured agent maps directly to one metadata file, one generated public env file, one generated secrets file, one Hermes home directory, one systemd user service, and one rootless Podman container.
 - A fresh install is idle until at least one agent is configured with `status: start`.
 - `SOUL.md` and the default Hermes home `.env` are seeded from checked-in templates with `sed` placeholder replacement.
-
-This is a pruning release. There is no migration path from the older shared-backend design; treat the current tree as fresh-install only.
 
 ## Current behavior
 
