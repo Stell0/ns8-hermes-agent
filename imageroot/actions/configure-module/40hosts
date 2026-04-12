@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail
+
+# Add all hosts from traefik to the hosts environment file for the agents, so that they can be used in the hermes-agent.service file to add --add-host arguments to podman.
+HOSTS_ENVFILE="hosts"
+HOST_LOOPBACK_IP="10.0.2.2"
+PODMAN_ADD_HOST_ARGS=""
+
+is_safe_host() {
+	local host="$1"
+	local label
+
+	[[ ${#host} -ge 1 && ${#host} -le 253 ]] || return 1
+	[[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+	[[ "$host" != *- ]] || return 1
+	[[ "$host" != .* ]] || return 1
+	[[ "$host" != *. ]] || return 1
+	[[ "$host" != *..* ]] || return 1
+
+	IFS='.' read -r -a labels <<<"$host"
+	for label in "${labels[@]}"; do
+		[[ ${#label} -ge 1 && ${#label} -le 63 ]] || return 1
+		[[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+	done
+
+	return 0
+}
+
+write_hosts_envfile() {
+	local temp_path
+
+	if [[ -L "$HOSTS_ENVFILE" || ( -e "$HOSTS_ENVFILE" && ! -f "$HOSTS_ENVFILE" ) ]]; then
+		echo "unsafe file path: $HOSTS_ENVFILE" >&2
+		exit 1
+	fi
+
+	temp_path=$(mktemp ".${HOSTS_ENVFILE}.XXXXXX")
+	trap 'rm -f "$temp_path"' EXIT
+
+	printf 'PODMAN_ADD_HOST_ARGS="%s"\n' "$PODMAN_ADD_HOST_ARGS" >"$temp_path"
+	chmod 600 "$temp_path"
+	mv -f "$temp_path" "$HOSTS_ENVFILE"
+	trap - EXIT
+}
+
+mapfile -t TRAEFIK_HOSTS < <(
+	api-cli run list-routes --agent module/traefik1 --data '{"expand_list":true}' |
+		jq -r '.[] | .host // empty' |
+		awk 'NF' |
+		LC_ALL=C sort -u
+)
+
+for host in "${TRAEFIK_HOSTS[@]}"; do
+	if ! is_safe_host "$host"; then
+		continue
+	fi
+
+	if [[ -n "$PODMAN_ADD_HOST_ARGS" ]]; then
+		PODMAN_ADD_HOST_ARGS+=" "
+	fi
+
+	PODMAN_ADD_HOST_ARGS+="--add-host=${host}:${HOST_LOOPBACK_IP}"
+done
+
+write_hosts_envfile

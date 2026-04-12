@@ -3,6 +3,7 @@ import io
 import json
 import os
 import runpy
+import subprocess
 import sys
 import tempfile
 import types
@@ -18,6 +19,7 @@ STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
 CREATE_MODULE_PATH = ROOT / "imageroot" / "actions" / "create-module" / "20create"
 CONFIGURE_MODULE_PATH = ROOT / "imageroot" / "actions" / "configure-module" / "20configure"
+CONFIGURE_HOSTS_PATH = ROOT / "imageroot" / "actions" / "configure-module" / "40hosts"
 GET_CONFIGURATION_PATH = ROOT / "imageroot" / "actions" / "get-configuration" / "20read"
 
 
@@ -41,6 +43,11 @@ def working_directory(path):
         yield
     finally:
         os.chdir(current_directory)
+
+
+def write_executable(path, content):
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o755)
 
 
 class HermesModuleStateTest(unittest.TestCase):
@@ -349,6 +356,93 @@ class HermesModuleStateTest(unittest.TestCase):
                 sys.modules["agent"] = original_agent
             else:
                 del sys.modules["agent"]
+
+    def test_configure_hosts_writes_unique_loopback_overrides(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+
+            write_executable(
+                bin_dir / "api-cli",
+                "#!/bin/sh\n"
+                "cat <<'JSON'\n"
+                "[\n"
+                "  {\"host\": \"mail.example.com\"},\n"
+                "  {\"host\": \"mail.example.com\", \"path\": \"/api\"},\n"
+                "  {\"path\": \"/health\"},\n"
+                "  {\"host\": \"chat.example.com\"},\n"
+                "  {\"host\": \"bad host\"},\n"
+                "  {\"host\": \"-bad.example.com\"},\n"
+                "  {\"host\": \"bad-.example.com\"},\n"
+                "  {\"host\": \"bad.example.com.\"}\n"
+                "]\n"
+                "JSON\n",
+            )
+            write_executable(
+                bin_dir / "jq",
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "import sys\n"
+                "for item in json.load(sys.stdin):\n"
+                "    host = item.get('host')\n"
+                "    if host:\n"
+                "        print(host)\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+            subprocess.run(["bash", str(CONFIGURE_HOSTS_PATH)], cwd=temp_dir, env=env, check=True)
+
+            self.assertEqual(
+                (temp_path / "hosts").read_text(encoding="utf-8"),
+                'PODMAN_ADD_HOST_ARGS="--add-host=chat.example.com:10.0.2.2 --add-host=mail.example.com:10.0.2.2"\n',
+            )
+
+    def test_configure_hosts_rejects_symlinked_hosts_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+
+            write_executable(
+                bin_dir / "api-cli",
+                "#!/bin/sh\n"
+                "cat <<'JSON'\n"
+                "[{\"host\": \"mail.example.com\"}]\n"
+                "JSON\n",
+            )
+            write_executable(
+                bin_dir / "jq",
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "import sys\n"
+                "for item in json.load(sys.stdin):\n"
+                "    host = item.get('host')\n"
+                "    if host:\n"
+                "        print(host)\n",
+            )
+
+            outside_path = temp_path / "outside.env"
+            outside_path.write_text("SAFE=1\n", encoding="utf-8")
+            os.symlink(outside_path, temp_path / "hosts")
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+            result = subprocess.run(
+                ["bash", str(CONFIGURE_HOSTS_PATH)],
+                cwd=temp_dir,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unsafe file path: hosts", result.stderr)
+            self.assertEqual(outside_path.read_text(encoding="utf-8"), "SAFE=1\n")
 
     def test_get_configuration_reports_actual_runtime_status_separately(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):

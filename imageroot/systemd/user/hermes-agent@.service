@@ -4,6 +4,7 @@ Description=Hermes agent runtime %i
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 EnvironmentFile=-%S/state/environment
+EnvironmentFile=-%S/state/hosts
 WorkingDirectory=%S/state
 Restart=always
 KillMode=none
@@ -22,6 +23,8 @@ ExecStart=/usr/bin/podman run \
     --env-file %S/state/agent_%i_secrets.env \
     --volume %S/state/agents/%i/home:/opt/data:z \
     --tz=${TIMEZONE} \
+    --network=slirp4netns:allow_host_loopback=true \
+    $PODMAN_ADD_HOST_ARGS \
     ${HERMES_AGENT_HERMES_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-%i
 ExecStopPost=-/usr/bin/podman rm --force hermes-agent-%i
