@@ -117,6 +117,7 @@ For agent `1`, the runtime looks like:
 - Hermes home bind mount: `%S/state/agents/1/home` mounted at `/opt/data`
 - Open WebUI data bind mount: `%S/state/agents/1/open-webui` mounted at `/app/backend/data`
 
+Restart supervision is owned by `hermes-agent@<id>.service` with `Restart=on-failure`; the Podman container launches do not set container-level restart policies.
 Hermes enables its API server on `127.0.0.1:8642` inside the pod. Hermes keeps the API server key in `agent_<id>_secrets.env`, and `sync-agent-runtime` mirrors only `OPENAI_API_KEY` into `agent_<id>_openwebui_secrets.env` for the Open WebUI container.
 
 ## Template seeding

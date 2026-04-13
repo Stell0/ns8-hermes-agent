@@ -17,6 +17,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
+SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-agent@.service"
 CREATE_MODULE_PATH = ROOT / "imageroot" / "actions" / "create-module" / "20create"
 CONFIGURE_MODULE_PATH = ROOT / "imageroot" / "actions" / "configure-module" / "20configure"
 DESTROY_MODULE_PATH = ROOT / "imageroot" / "actions" / "destroy-module" / "20destroy"
@@ -159,6 +160,15 @@ class HermesModuleStateTest(unittest.TestCase):
                 sys.modules["agent"] = original_agent
             else:
                 del sys.modules["agent"]
+
+    def test_service_template_does_not_load_removed_hosts_envfile(self):
+        service_template = SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("Restart=on-failure", service_template)
+        self.assertNotIn("Restart=always", service_template)
+        self.assertNotIn("EnvironmentFile=-%S/state/hosts", service_template)
+        self.assertNotIn("$PODMAN_ADD_HOST_ARGS", service_template)
+        self.assertNotIn("--restart=always", service_template)
 
     def test_write_envfile_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):

@@ -29,7 +29,7 @@ runagent -m hermes-agent1 podman exec -it hermes-agent-1 hermes gateway setup
 When you are done, exit the console and restart the agent to pick up the new configuration:
 
 ```bash
-runagent -m hermes-agent1 podman exec -it hermes-agent-1 hermes gateway stop
+runagent -m hermes-agent1 systemctl --user restart hermes-agent@1.service
 ```
 
 ## Accessing the agent console
@@ -173,6 +173,7 @@ Each started agent runs:
 - one bind-mounted Hermes home directory at `/opt/data`
 - one bind-mounted Open WebUI data directory at `/app/backend/data`
 
+Restart supervision is owned by the systemd user unit with `Restart=on-failure`; the Podman container launches do not set container-level restart policies.
 Open WebUI is wired to Hermes through the pod-local API server on `127.0.0.1:8642`, and the module publishes one host TCP port per agent from the module-owned 30-port pool.
 The Hermes container reads `agent_<id>_secrets.env`; the Open WebUI container gets only its mirrored `OPENAI_API_KEY` from `agent_<id>_openwebui_secrets.env`.
 
