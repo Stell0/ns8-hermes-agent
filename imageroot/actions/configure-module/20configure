@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import agent
+import agent.tasks
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
 from hermes_agent_state import (
 	AGENTS_DIR,
+	BASE_VIRTUALHOST_ENV,
 	ENVIRONMENT_FILE,
 	TIMEZONE_DEFAULT,
 	TIMEZONE_ENV,
+	agent_webui_host_port,
+	base_virtualhost_value,
 	agent_metadata_path,
 	container_name,
 	ensure_private_directory,
 	list_known_agent_ids,
+	openwebui_container_name,
+	pod_name,
 	read_envfile,
 	remove_agent_state,
+	route_instance_name,
+	route_path,
 	service_unit,
+	validate_base_virtualhost,
 	validate_agents,
 	write_jsonfile,
 )
@@ -32,7 +42,48 @@ def run(command, check=True):
 
 def stop_disable_agent(agent_id):
 	run(["systemctl", "--user", "disable", "--now", service_unit(agent_id)], check=False)
+	run(["podman", "pod", "rm", "--force", pod_name(agent_id)], check=False)
 	run(["podman", "rm", "--force", container_name(agent_id)], check=False)
+	run(["podman", "rm", "--force", openwebui_container_name(agent_id)], check=False)
+
+
+def resolve_traefik_agent_id():
+	traefik_id = agent.resolve_agent_id("traefik@node")
+	if traefik_id is None:
+		raise ValueError("traefik@node route agent not found")
+	return traefik_id
+
+
+def delete_agent_route(agent_id, traefik_agent_id):
+	response = agent.tasks.run(
+		agent_id=traefik_agent_id,
+		action="delete-route",
+		data={"instance": route_instance_name(agent_id, module_id=ENV_MODULE_ID)},
+	)
+	agent.assert_exp(response["exit_code"] == 0)
+
+
+def upsert_agent_route(agent_id, shared_environment, base_virtualhost, traefik_agent_id):
+	path = route_path(agent_id)
+	response = agent.tasks.run(
+		agent_id=traefik_agent_id,
+		action="set-route",
+		data={
+			"instance": route_instance_name(agent_id, module_id=ENV_MODULE_ID),
+			"url": f"http://127.0.0.1:{agent_webui_host_port(agent_id, shared_environment)}",
+			"host": base_virtualhost,
+			"path": path,
+			"http2https": True,
+			"lets_encrypt": False,
+			"strip_prefix": True,
+			"headers": {
+				"request": {
+					"X-Forwarded-Prefix": path,
+				}
+			},
+		},
+	)
+	agent.assert_exp(response["exit_code"] == 0)
 
 
 
@@ -40,29 +91,57 @@ request = json.load(sys.stdin)
 if not isinstance(request, dict):
 	raise ValueError("configure-module input must be an object")
 
-unexpected_fields = sorted(set(request) - {"agents"})
+unexpected_fields = sorted(set(request) - {"agents", "base_virtualhost"})
 if unexpected_fields:
 	raise ValueError(f"unexpected configure-module fields: {', '.join(unexpected_fields)}")
 
 agents = validate_agents(request.get("agents"))
 desired_ids = {agent_data["id"] for agent_data in agents}
 known_ids = set(list_known_agent_ids())
+shared_environment = read_envfile(ENVIRONMENT_FILE)
+current_base_virtualhost = base_virtualhost_value(shared_environment)
+requested_base_virtualhost = request.get("base_virtualhost")
+if requested_base_virtualhost is None:
+	base_virtualhost = current_base_virtualhost
+else:
+	base_virtualhost = validate_base_virtualhost(requested_base_virtualhost)
+	agent.set_env(BASE_VIRTUALHOST_ENV, base_virtualhost)
+	shared_environment[BASE_VIRTUALHOST_ENV] = base_virtualhost
 
-if not read_envfile(ENVIRONMENT_FILE).get(TIMEZONE_ENV):
+ENV_MODULE_ID = os.environ.get("MODULE_ID") or shared_environment.get("MODULE_ID") or Path.cwd().name
+
+if not shared_environment.get(TIMEZONE_ENV):
 	agent.set_env(TIMEZONE_ENV, TIMEZONE_DEFAULT)
+	shared_environment[TIMEZONE_ENV] = TIMEZONE_DEFAULT
 
 ensure_private_directory(AGENTS_DIR)
 
 for agent_data in agents:
 	write_jsonfile(agent_metadata_path(agent_data["id"]), agent_data)
 
+traefik_agent_id = None
+if known_ids or desired_ids or current_base_virtualhost or base_virtualhost:
+	if current_base_virtualhost or base_virtualhost:
+		traefik_agent_id = resolve_traefik_agent_id()
+
 for agent_id in sorted(known_ids - desired_ids):
+	if traefik_agent_id is not None:
+		delete_agent_route(agent_id, traefik_agent_id)
 	stop_disable_agent(agent_id)
 	remove_agent_state(agent_id)
 
 run(["runagent", "discover-smarthost"])
 run(["runagent", "sync-agent-runtime"])
 run(["systemctl", "--user", "daemon-reload"])
+
+if traefik_agent_id is not None:
+	managed_ids = sorted(known_ids | desired_ids)
+	if base_virtualhost:
+		for agent_id in sorted(desired_ids):
+			upsert_agent_route(agent_id, shared_environment, base_virtualhost, traefik_agent_id)
+	else:
+		for agent_id in managed_ids:
+			delete_agent_route(agent_id, traefik_agent_id)
 
 for agent_data in agents:
 	agent_id = agent_data["id"]

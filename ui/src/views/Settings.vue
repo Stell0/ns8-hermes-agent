@@ -32,18 +32,40 @@
                   <p class="section-description">
                     {{ $t("settings.agents_description") }}
                   </p>
+                  <p v-if="isAgentLimitReached" class="section-description">
+                    {{ $t("settings.agent_limit_reached") }}
+                  </p>
                 </cv-column>
                 <cv-column :md="2" :max="8" class="toolbar-actions">
                   <NsButton
                     kind="secondary"
                     :icon="Add20"
                     :disabled="
-                      loading.getConfiguration || loading.configureModule
+                      loading.getConfiguration ||
+                      loading.configureModule ||
+                      isAgentLimitReached
                     "
                     @click="showCreateAgentModal"
                   >
                     {{ $t("settings.create_agent") }}
                   </NsButton>
+                </cv-column>
+              </cv-row>
+              <cv-row>
+                <cv-column :md="6" :max="8">
+                  <NsTextInput
+                    v-model.trim="baseVirtualhost"
+                    :label="$t('settings.base_virtualhost')"
+                    :placeholder="$t('settings.base_virtualhost_placeholder')"
+                    :invalid-message="error.baseVirtualhost"
+                    :disabled="
+                      loading.getConfiguration || loading.configureModule
+                    "
+                    ref="baseVirtualhost"
+                  />
+                  <p class="section-description">
+                    {{ $t("settings.base_virtualhost_description") }}
+                  </p>
                 </cv-column>
               </cv-row>
               <cv-row>
@@ -69,6 +91,9 @@
                         {{ $t("settings.status") }}
                       </cv-structured-list-heading>
                       <cv-structured-list-heading>
+                        {{ $t("settings.webui") }}
+                      </cv-structured-list-heading>
+                      <cv-structured-list-heading>
                         {{ $t("settings.actions") }}
                       </cv-structured-list-heading>
                     </template>
@@ -90,6 +115,18 @@
                             :label="statusLabel(agentData.status)"
                             class="no-margin"
                           ></cv-tag>
+                        </cv-structured-list-data>
+                        <cv-structured-list-data class="break-word">
+                          <cv-link
+                            v-if="agentWebuiUrl(agentData)"
+                            :href="agentWebuiUrl(agentData)"
+                            target="_blank"
+                          >
+                            {{ agentWebuiUrl(agentData) }}
+                          </cv-link>
+                          <span v-else>{{
+                            $t("settings.webui_not_configured")
+                          }}</span>
                         </cv-structured-list-data>
                         <cv-structured-list-data
                           class="table-overflow-menu-cell"
@@ -348,6 +385,7 @@ export default {
         page: "settings",
       },
       urlCheckInterval: null,
+      baseVirtualhost: "",
       roles: [
         "default",
         "developer",
@@ -381,6 +419,7 @@ export default {
       error: {
         getConfiguration: "",
         configureModule: "",
+        baseVirtualhost: "",
         createAgentName: "",
         createAgentRole: "",
         editAgentName: "",
@@ -401,6 +440,9 @@ export default {
     },
     showDeleteAgentError() {
       return this.configureMode === "delete" && !!this.error.configureModule;
+    },
+    isAgentLimitReached() {
+      return this.agents.length >= 30;
     },
   },
   beforeRouteEnter(to, from, next) {
@@ -461,6 +503,9 @@ export default {
       this.loading.getConfiguration = false;
       const config = taskResult.output;
 
+      this.baseVirtualhost = this.normalizeBaseVirtualhost(
+        config.base_virtualhost || ""
+      );
       this.agents = this.normalizeAgents(config.agents || []);
     },
     configureModuleValidationFailed(validationErrors) {
@@ -509,11 +554,28 @@ export default {
             }
           }
         }
+
+        if (field.endsWith("base_virtualhost")) {
+          this.error.baseVirtualhost = this.$t(
+            "settings.base_virtualhost_invalid"
+          );
+
+          if (!focusAlreadySet) {
+            this.focusElement("baseVirtualhost");
+            focusAlreadySet = true;
+          }
+        }
       }
 
       this.error.configureModule = this.$t("error.validation_error");
     },
     async saveAgents(nextAgents, mode) {
+      this.error.baseVirtualhost = "";
+      if (!this.validateBaseVirtualhost()) {
+        this.error.configureModule = this.$t("error.validation_error");
+        return;
+      }
+
       this.loading.configureModule = true;
       this.error.configureModule = "";
       this.configureMode = mode;
@@ -540,6 +602,7 @@ export default {
         this.createModuleTaskForApp(this.instanceName, {
           action: taskAction,
           data: {
+            base_virtualhost: this.normalizeBaseVirtualhost(),
             agents: this.buildAgentPayload(this.submittedAgents),
           },
           extra: {
@@ -591,11 +654,40 @@ export default {
       });
     },
     nextAgentId() {
-      return (
-        this.agents.reduce((maxId, agentData) => {
-          return Math.max(maxId, agentData.id);
-        }, 0) + 1
-      );
+      for (let candidateId = 1; candidateId <= 30; candidateId++) {
+        if (!this.agents.some((agentData) => agentData.id === candidateId)) {
+          return candidateId;
+        }
+      }
+
+      return null;
+    },
+    normalizeBaseVirtualhost(value = this.baseVirtualhost) {
+      return (value || "").trim().toLowerCase();
+    },
+    validateBaseVirtualhost() {
+      const normalizedBaseVirtualhost = this.normalizeBaseVirtualhost();
+      if (
+        normalizedBaseVirtualhost &&
+        !/^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/.test(
+          normalizedBaseVirtualhost
+        )
+      ) {
+        this.error.baseVirtualhost = this.$t(
+          "settings.base_virtualhost_invalid"
+        );
+        return false;
+      }
+
+      return true;
+    },
+    agentWebuiUrl(agentData) {
+      const normalizedBaseVirtualhost = this.normalizeBaseVirtualhost();
+      if (!normalizedBaseVirtualhost) {
+        return "";
+      }
+
+      return `https://${normalizedBaseVirtualhost}/hermes-agent-${agentData.id}/`;
     },
     roleLabel(role) {
       return this.$t(`settings.role_${role}`);
@@ -741,10 +833,16 @@ export default {
         return;
       }
 
+      const nextId = this.nextAgentId();
+      if (!nextId) {
+        this.error.configureModule = this.$t("settings.agent_limit_reached");
+        return;
+      }
+
       const nextAgents = [
         ...this.agents,
         {
-          id: this.nextAgentId(),
+          id: nextId,
           name: this.createAgentForm.name.trim(),
           role: this.createAgentForm.role,
           status: "start",

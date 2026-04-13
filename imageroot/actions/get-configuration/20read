@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
-from hermes_agent_state import actual_agent_status, read_agents_from_state
+from hermes_agent_state import actual_agent_status, base_virtualhost_value, read_agents_from_state
 
 
 
@@ -19,4 +19,4 @@ for agent_data in read_agents_from_state():
 		}
 	)
 
-json.dump({"agents": agents}, fp=sys.stdout)
+json.dump({"base_virtualhost": base_virtualhost_value(), "agents": agents}, fp=sys.stdout)

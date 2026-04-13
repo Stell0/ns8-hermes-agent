@@ -36,6 +36,7 @@ build_component_image() {
 
 component_images=(
     "${repobase}/hermes-agent-hermes:${imagetag}"
+    "${repobase}/hermes-agent-open-webui:${imagetag}"
 )
 
 # Create a new empty container image
@@ -55,12 +56,15 @@ buildah run \
     sh -c "yarn install && yarn build"
 
 build_component_image "hermes-agent-hermes" "containers/hermes"
+build_component_image "hermes-agent-open-webui" "containers/open-webui"
 
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot
 buildah add "${container}" ui/dist /ui
 # Setup the entrypoint and set a rootless container
 buildah config --entrypoint=/ \
+    --label="org.nethserver.authorizations=traefik@node:routeadm node:portsadm" \
+    --label="org.nethserver.tcp-ports-demand=30" \
     --label="org.nethserver.rootfull=0" \
     --label="org.nethserver.images=${component_images[*]}" \
     "${container}"

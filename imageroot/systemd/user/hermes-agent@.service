@@ -12,13 +12,16 @@ Type=notify
 NotifyAccess=all
 ExecStartPre=/usr/local/bin/runagent discover-smarthost
 ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id %i
-ExecStartPre=-/usr/bin/podman rm --force hermes-agent-%i
+ExecStartPre=-/usr/bin/podman pod rm --force hermes-pod-agent-%i
+ExecStartPre=/usr/bin/bash -lc 'set -euo pipefail; port=$(grep "^AGENT_OPENWEBUI_HOST_PORT=" %S/state/agent_%i.env | cut -d= -f2-); exec /usr/bin/podman pod create --replace --name hermes-pod-agent-%i --infra-name hermes-pod-agent-%i-infra --network=slirp4netns:allow_host_loopback=true --publish 127.0.0.1:${port}:8080'
+ExecStartPre=/usr/bin/podman run --detach --rm --restart=always --name openwebui-agent-%i --pod hermes-pod-agent-%i --env-file %S/state/agent_%i_openwebui.env --env-file %S/state/agent_%i_openwebui_secrets.env --volume %S/state/agents/%i/open-webui:/app/backend/data:z --tz=${TIMEZONE} ${HERMES_AGENT_OPEN_WEBUI_IMAGE}
 ExecStart=/usr/bin/podman run \
     --name hermes-agent-%i \
     --replace \
     --rm \
     --sdnotify=conmon \
     --cgroups=no-conmon \
+    --pod hermes-pod-agent-%i \
     --env-file %S/state/agent_%i.env \
     --env-file %S/state/agent_%i_secrets.env \
     --volume %S/state/agents/%i/home:/opt/data:z \
@@ -26,8 +29,8 @@ ExecStart=/usr/bin/podman run \
     --network=slirp4netns:allow_host_loopback=true \
     $PODMAN_ADD_HOST_ARGS \
     ${HERMES_AGENT_HERMES_IMAGE}
-ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-%i
-ExecStopPost=-/usr/bin/podman rm --force hermes-agent-%i
+ExecStop=/usr/bin/podman pod stop --ignore --time 10 hermes-pod-agent-%i
+ExecStopPost=-/usr/bin/podman pod rm --force hermes-pod-agent-%i
 TimeoutStopSec=70
 
 [Install]

@@ -19,8 +19,9 @@ STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
 CREATE_MODULE_PATH = ROOT / "imageroot" / "actions" / "create-module" / "20create"
 CONFIGURE_MODULE_PATH = ROOT / "imageroot" / "actions" / "configure-module" / "20configure"
-CONFIGURE_HOSTS_PATH = ROOT / "imageroot" / "actions" / "configure-module" / "40hosts"
+DESTROY_MODULE_PATH = ROOT / "imageroot" / "actions" / "destroy-module" / "20destroy"
 GET_CONFIGURATION_PATH = ROOT / "imageroot" / "actions" / "get-configuration" / "20read"
+UPDATE_TCP_PORTS_PATH = ROOT / "imageroot" / "update-module.d" / "10ensure_tcp_ports"
 
 
 def load_module(path, module_name):
@@ -99,6 +100,19 @@ class HermesModuleStateTest(unittest.TestCase):
                 ]
             )
 
+    def test_validate_agents_rejects_id_above_supported_limit(self):
+        with self.assertRaisesRegex(ValueError, "invalid id"):
+            self.state.validate_agents(
+                [
+                    {
+                        "id": 31,
+                        "name": "Valid Name",
+                        "role": "default",
+                        "status": "start",
+                    }
+                ]
+            )
+
     def test_create_module_sets_timezone_and_initializes_state(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
@@ -166,6 +180,8 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.state.ENVIRONMENT_FILE,
                 {
                     "TIMEZONE": "UTC",
+                    "TCP_PORTS_RANGE": "20001-20030",
+                    "BASE_VIRTUALHOST": "agents.example.org",
                     "SMTP_ENABLED": "1",
                     "SMTP_HOST": "smtp.example.org",
                 },
@@ -175,15 +191,28 @@ class HermesModuleStateTest(unittest.TestCase):
             self.sync.sync_agent_runtime_files()
 
             public_env = self.state.read_envfile(self.state.agent_envfile(1))
+            openwebui_env = self.state.read_envfile(self.state.agent_openwebui_envfile(1))
+            openwebui_secrets = self.state.read_envfile(self.state.agent_openwebui_secrets_envfile(1))
             agent_secrets = self.state.read_envfile(self.state.agent_secrets_envfile(1))
             soul_path = self.state.agent_home_dir(1) / "SOUL.md"
             home_env_path = self.state.agent_home_dir(1) / ".env"
+            openwebui_data_dir = self.state.agent_openwebui_data_dir(1)
 
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
             self.assertEqual(public_env["AGENT_ROLE"], "developer")
             self.assertEqual(public_env["SMTP_HOST"], "smtp.example.org")
+            self.assertEqual(public_env["AGENT_OPENWEBUI_HOST_PORT"], "20001")
+            self.assertEqual(public_env["API_SERVER_ENABLED"], "true")
+            self.assertEqual(public_env["API_SERVER_HOST"], "127.0.0.1")
+            self.assertEqual(public_env["API_SERVER_PORT"], "8642")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
+            self.assertEqual(agent_secrets["API_SERVER_KEY"], agent_secrets["OPENAI_API_KEY"])
+            self.assertEqual(openwebui_env["OPENAI_API_BASE_URL"], "http://127.0.0.1:8642/v1")
+            self.assertEqual(openwebui_env["WEBUI_NAME"], "Alice User")
+            self.assertEqual(openwebui_env["WEBUI_URL"], "https://agents.example.org/hermes-agent-1/")
+            self.assertEqual(openwebui_secrets, {"OPENAI_API_KEY": agent_secrets["OPENAI_API_KEY"]})
+            self.assertTrue(openwebui_data_dir.is_dir())
             self.assertIn("Your name is Alice User.", soul_path.read_text(encoding="utf-8"))
             self.assertIn("AGENT_NAME=Alice User", home_env_path.read_text(encoding="utf-8"))
             self.assertIn("AGENT_ROLE=developer", home_env_path.read_text(encoding="utf-8"))
@@ -193,6 +222,10 @@ class HermesModuleStateTest(unittest.TestCase):
             self.state.write_jsonfile(
                 self.state.agent_metadata_path(2),
                 {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "stop"},
+            )
+            self.state.write_envfile(
+                self.state.ENVIRONMENT_FILE,
+                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
             )
             home_dir = self.state.agent_home_dir(2)
             self.state.ensure_private_directory(home_dir)
@@ -211,6 +244,10 @@ class HermesModuleStateTest(unittest.TestCase):
             self.state.write_jsonfile(
                 self.state.agent_metadata_path(2),
                 {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "start"},
+            )
+            self.state.write_envfile(
+                self.state.ENVIRONMENT_FILE,
+                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
             )
 
             self.sync.sync_agent_runtime_files(agent_id=2)
@@ -242,6 +279,10 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.state.agent_metadata_path(2),
                 {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "start"},
             )
+            self.state.write_envfile(
+                self.state.ENVIRONMENT_FILE,
+                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
+            )
 
             self.sync.sync_agent_runtime_files(agent_id=2)
 
@@ -266,6 +307,10 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.state.agent_metadata_path(4),
                 {"id": 4, "name": "Dana Agent", "role": "sales", "status": "start"},
             )
+            self.state.write_envfile(
+                self.state.ENVIRONMENT_FILE,
+                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
+            )
             home_dir = self.state.agent_home_dir(4)
             self.state.ensure_private_directory(home_dir)
             soul_path = home_dir / "SOUL.md"
@@ -286,8 +331,17 @@ class HermesModuleStateTest(unittest.TestCase):
                 {"id": 3, "name": "Carol Agent", "role": "researcher", "status": "start"},
             )
             self.state.write_envfile(
+                self.state.ENVIRONMENT_FILE,
+                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
+            )
+            self.state.write_envfile(
                 self.state.agent_secrets_envfile(3),
-                {"HERMES_AGENT_SECRET": "preserved", "SMTP_PASSWORD": "old-pass"},
+                {
+                    "HERMES_AGENT_SECRET": "preserved",
+                    "API_SERVER_KEY": "persisted-api-key",
+                    "OPENAI_API_KEY": "persisted-api-key",
+                    "SMTP_PASSWORD": "old-pass",
+                },
             )
             self.state.write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"SMTP_PASSWORD": "new-pass"})
 
@@ -295,13 +349,88 @@ class HermesModuleStateTest(unittest.TestCase):
 
             agent_secrets = self.state.read_envfile(self.state.agent_secrets_envfile(3))
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], "preserved")
+            self.assertEqual(agent_secrets["API_SERVER_KEY"], "persisted-api-key")
+            self.assertEqual(agent_secrets["OPENAI_API_KEY"], "persisted-api-key")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
+
+    def test_ensure_tcp_ports_environment_keeps_existing_valid_range(self):
+        allocator = mock.Mock()
+
+        env_patch = self.state.ensure_tcp_ports_environment(
+            {
+                "TCP_PORT": "20001",
+                "TCP_PORTS_RANGE": "20001-20030",
+            },
+            allocate_ports=allocator,
+        )
+
+        self.assertEqual(env_patch, {})
+        allocator.assert_not_called()
+
+    def test_ensure_tcp_ports_environment_repairs_missing_tcp_port(self):
+        allocator = mock.Mock()
+
+        env_patch = self.state.ensure_tcp_ports_environment(
+            {
+                "TCP_PORTS_RANGE": "20001-20030",
+            },
+            allocate_ports=allocator,
+        )
+
+        self.assertEqual(env_patch, {"TCP_PORT": "20001"})
+        allocator.assert_not_called()
+
+    def test_ensure_tcp_ports_environment_reallocates_missing_range(self):
+        allocator = mock.Mock(return_value=(21000, 21029))
+
+        env_patch = self.state.ensure_tcp_ports_environment({}, allocate_ports=allocator)
+
+        self.assertEqual(
+            env_patch,
+            {
+                "TCP_PORT": "21000",
+                "TCP_PORTS_RANGE": "21000-21029",
+            },
+        )
+        allocator.assert_called_once_with(self.state.MAX_AGENTS, "tcp")
+
+    def test_update_module_repairs_missing_tcp_ports_range(self):
+        original_agent = sys.modules.get("agent")
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "allocate_ports", mock.Mock(return_value=(22000, 22029)))
+        setattr(agent_stub, "mset_env", mock.Mock())
+        sys.modules["agent"] = agent_stub
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+                self.state.write_envfile(self.state.ENVIRONMENT_FILE, {"MODULE_ID": "hermes-agent1"})
+
+                runpy.run_path(str(UPDATE_TCP_PORTS_PATH), run_name="__main__")
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
+
+        agent_stub.allocate_ports.assert_called_once_with(self.state.MAX_AGENTS, "tcp")
+        agent_stub.mset_env.assert_called_once_with(
+            {
+                "TCP_PORT": "22000",
+                "TCP_PORTS_RANGE": "22000-22029",
+            }
+        )
 
     def test_configure_module_reconciles_removed_and_started_agents(self):
         original_agent = sys.modules.get("agent")
+        original_agent_tasks = sys.modules.get("agent.tasks")
+        agent_tasks_stub = types.ModuleType("agent.tasks")
+        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+
         agent_stub = types.ModuleType("agent")
         setattr(agent_stub, "set_env", mock.Mock())
+        setattr(agent_stub, "tasks", agent_tasks_stub)
         sys.modules["agent"] = agent_stub
+        sys.modules["agent.tasks"] = agent_tasks_stub
 
         try:
             with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -342,7 +471,9 @@ class HermesModuleStateTest(unittest.TestCase):
                             ["systemctl", "--user", "disable", "--now", "hermes-agent@2.service"],
                             check=False,
                         ),
+                        mock.call(["podman", "pod", "rm", "--force", "hermes-pod-agent-2"], check=False),
                         mock.call(["podman", "rm", "--force", "hermes-agent-2"], check=False),
+                        mock.call(["podman", "rm", "--force", "openwebui-agent-2"], check=False),
                         mock.call(["runagent", "discover-smarthost"], check=True),
                         mock.call(["runagent", "sync-agent-runtime"], check=True),
                         mock.call(["systemctl", "--user", "daemon-reload"], check=True),
@@ -357,92 +488,141 @@ class HermesModuleStateTest(unittest.TestCase):
             else:
                 del sys.modules["agent"]
 
-    def test_configure_hosts_writes_unique_loopback_overrides(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            bin_dir = temp_path / "bin"
-            bin_dir.mkdir()
+    def test_configure_module_sets_traefik_routes_for_webui(self):
+        original_agent = sys.modules.get("agent")
+        original_agent_tasks = sys.modules.get("agent.tasks")
+        agent_tasks_stub = types.ModuleType("agent.tasks")
+        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
 
-            write_executable(
-                bin_dir / "api-cli",
-                "#!/bin/sh\n"
-                "cat <<'JSON'\n"
-                "[\n"
-                "  {\"host\": \"mail.example.com\"},\n"
-                "  {\"host\": \"mail.example.com\", \"path\": \"/api\"},\n"
-                "  {\"path\": \"/health\"},\n"
-                "  {\"host\": \"chat.example.com\"},\n"
-                "  {\"host\": \"bad host\"},\n"
-                "  {\"host\": \"-bad.example.com\"},\n"
-                "  {\"host\": \"bad-.example.com\"},\n"
-                "  {\"host\": \"bad.example.com.\"}\n"
-                "]\n"
-                "JSON\n",
-            )
-            write_executable(
-                bin_dir / "jq",
-                "#!/usr/bin/env python3\n"
-                "import json\n"
-                "import sys\n"
-                "for item in json.load(sys.stdin):\n"
-                "    host = item.get('host')\n"
-                "    if host:\n"
-                "        print(host)\n",
-            )
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "set_env", mock.Mock())
+        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
+        setattr(agent_stub, "assert_exp", mock.Mock())
+        setattr(agent_stub, "tasks", agent_tasks_stub)
+        sys.modules["agent"] = agent_stub
+        sys.modules["agent.tasks"] = agent_tasks_stub
 
-            env = os.environ.copy()
-            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+                self.state.write_envfile(
+                    self.state.ENVIRONMENT_FILE,
+                    {
+                        "MODULE_ID": "hermes-agent1",
+                        "TIMEZONE": "UTC",
+                        "TCP_PORTS_RANGE": "20001-20030",
+                    },
+                )
 
-            subprocess.run(["bash", str(CONFIGURE_HOSTS_PATH)], cwd=temp_dir, env=env, check=True)
+                with mock.patch.dict(os.environ, {"MODULE_ID": "hermes-agent1"}, clear=False), mock.patch(
+                    "sys.stdin",
+                    io.StringIO(
+                        json.dumps(
+                            {
+                                "base_virtualhost": "agents.example.org",
+                                "agents": [
+                                    {
+                                        "id": 1,
+                                        "name": "Route Agent",
+                                        "role": "developer",
+                                        "status": "start",
+                                    }
+                                ],
+                            }
+                        )
+                    ),
+                ), mock.patch("subprocess.run"):
+                    runpy.run_path(str(CONFIGURE_MODULE_PATH), run_name="__main__")
 
-            self.assertEqual(
-                (temp_path / "hosts").read_text(encoding="utf-8"),
-                'PODMAN_ADD_HOST_ARGS="--add-host=chat.example.com:10.0.2.2 --add-host=mail.example.com:10.0.2.2"\n',
-            )
+                agent_stub.set_env.assert_called_once_with("BASE_VIRTUALHOST", "agents.example.org")
+                agent_stub.resolve_agent_id.assert_called_once_with("traefik@node")
+                agent_tasks_stub.run.assert_called_once_with(
+                    agent_id="module/traefik1",
+                    action="set-route",
+                    data={
+                        "instance": "hermes-agent1-hermes-agent-1",
+                        "url": "http://127.0.0.1:20001",
+                        "host": "agents.example.org",
+                        "path": "/hermes-agent-1",
+                        "http2https": True,
+                        "lets_encrypt": False,
+                        "strip_prefix": True,
+                        "headers": {
+                            "request": {
+                                "X-Forwarded-Prefix": "/hermes-agent-1",
+                            }
+                        },
+                    },
+                )
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
 
-    def test_configure_hosts_rejects_symlinked_hosts_file(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            bin_dir = temp_path / "bin"
-            bin_dir.mkdir()
+            if original_agent_tasks is not None:
+                sys.modules["agent.tasks"] = original_agent_tasks
+            elif "agent.tasks" in sys.modules:
+                del sys.modules["agent.tasks"]
 
-            write_executable(
-                bin_dir / "api-cli",
-                "#!/bin/sh\n"
-                "cat <<'JSON'\n"
-                "[{\"host\": \"mail.example.com\"}]\n"
-                "JSON\n",
-            )
-            write_executable(
-                bin_dir / "jq",
-                "#!/usr/bin/env python3\n"
-                "import json\n"
-                "import sys\n"
-                "for item in json.load(sys.stdin):\n"
-                "    host = item.get('host')\n"
-                "    if host:\n"
-                "        print(host)\n",
-            )
+    def test_destroy_module_removes_routes_and_runtime_for_openwebui_only_state(self):
+        original_agent = sys.modules.get("agent")
+        original_agent_tasks = sys.modules.get("agent.tasks")
+        agent_tasks_stub = types.ModuleType("agent.tasks")
+        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
 
-            outside_path = temp_path / "outside.env"
-            outside_path.write_text("SAFE=1\n", encoding="utf-8")
-            os.symlink(outside_path, temp_path / "hosts")
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
+        setattr(agent_stub, "assert_exp", mock.Mock())
+        setattr(agent_stub, "tasks", agent_tasks_stub)
+        sys.modules["agent"] = agent_stub
+        sys.modules["agent.tasks"] = agent_tasks_stub
 
-            env = os.environ.copy()
-            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+                self.state.write_envfile(
+                    self.state.agent_openwebui_envfile(4),
+                    {"OPENAI_API_BASE_URL": "http://127.0.0.1:8642/v1"},
+                )
+                self.state.write_envfile(
+                    self.state.agent_openwebui_secrets_envfile(4),
+                    {"OPENAI_API_KEY": "persisted-api-key"},
+                )
 
-            result = subprocess.run(
-                ["bash", str(CONFIGURE_HOSTS_PATH)],
-                cwd=temp_dir,
-                env=env,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+                with mock.patch.dict(os.environ, {"MODULE_ID": "hermes-agent1"}, clear=False), mock.patch(
+                    "sys.stdin", io.StringIO("{}")
+                ), mock.patch("subprocess.run") as run_command:
+                    runpy.run_path(str(DESTROY_MODULE_PATH), run_name="__main__")
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("unsafe file path: hosts", result.stderr)
-            self.assertEqual(outside_path.read_text(encoding="utf-8"), "SAFE=1\n")
+                agent_stub.resolve_agent_id.assert_called_once_with("traefik@node")
+                agent_tasks_stub.run.assert_called_once_with(
+                    agent_id="module/traefik1",
+                    action="delete-route",
+                    data={"instance": "hermes-agent1-hermes-agent-4"},
+                )
+                self.assertEqual(
+                    run_command.call_args_list,
+                    [
+                        mock.call(
+                            ["systemctl", "--user", "disable", "--now", "hermes-agent@4.service"],
+                            check=False,
+                        ),
+                        mock.call(["podman", "pod", "rm", "--force", "hermes-pod-agent-4"], check=False),
+                        mock.call(["podman", "rm", "--force", "hermes-agent-4"], check=False),
+                        mock.call(["podman", "rm", "--force", "openwebui-agent-4"], check=False),
+                    ],
+                )
+                self.assertFalse(self.state.agent_openwebui_envfile(4).exists())
+                self.assertFalse(self.state.agent_openwebui_secrets_envfile(4).exists())
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
+
+            if original_agent_tasks is not None:
+                sys.modules["agent.tasks"] = original_agent_tasks
+            elif "agent.tasks" in sys.modules:
+                del sys.modules["agent.tasks"]
 
     def test_get_configuration_reports_actual_runtime_status_separately(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -461,6 +641,7 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(
                 json.loads(stdout.getvalue()),
                 {
+                    "base_virtualhost": "",
                     "agents": [
                         {
                             "id": 1,

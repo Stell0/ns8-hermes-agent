@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-- Keep changes within the current scaffold unless the task explicitly expands scope: NS8 module runtime under `imageroot/`, embedded admin UI under `ui/`, the Hermes wrapper image under `containers/`, and basic CI and test scaffolding.
+- Keep changes within the current scaffold unless the task explicitly expands scope: NS8 module runtime under `imageroot/`, embedded admin UI under `ui/`, the wrapper images under `containers/`, and basic CI and test scaffolding.
 - Prefer the smallest coherent change and keep related docs, tests, and build files in sync.
 - Put long reference material in normal docs, not in AGENTS. Use `README.md` for current status and operator-facing behavior, `STRUCTURE.md` for file maps, and `NS8-MODULE.md` for NS8 lifecycle details.
 - Only `imageroot/` and `ui/` currently justify local AGENTS files. Do not add more unless a subtree gains genuinely different conventions.

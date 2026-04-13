@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+
+import agent
+import sys
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
+
+from hermes_agent_state import ensure_tcp_ports_environment
+
+
+env_patch = ensure_tcp_ports_environment(allocate_ports=agent.allocate_ports)
+if env_patch:
+    agent.mset_env(env_patch)

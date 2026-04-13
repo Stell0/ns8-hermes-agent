@@ -4,7 +4,9 @@ LABEL org.opencontainers.image.description="Thin wrapper around the upstream Her
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gh \
-    git
+    git \
+    python3-googleapi \
+    python3-google-auth-oauthlib
 
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
 CMD ["gateway", "run"]

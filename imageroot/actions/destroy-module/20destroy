@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import agent
+import agent.tasks
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
-from hermes_agent_state import AGENTS_DIR, container_name, list_known_agent_ids, remove_agent_state, service_unit
+from hermes_agent_state import (
+    AGENTS_DIR,
+    container_name,
+    list_known_agent_ids,
+    openwebui_container_name,
+    pod_name,
+    remove_agent_state,
+    route_instance_name,
+    service_unit,
+)
 
 
 def run(command, check=True):
@@ -18,9 +31,20 @@ def run(command, check=True):
 
 json.load(sys.stdin)
 
+traefik_agent_id = agent.resolve_agent_id("traefik@node")
+
 for agent_id in list_known_agent_ids():
+    if traefik_agent_id is not None:
+        response = agent.tasks.run(
+            agent_id=traefik_agent_id,
+            action="delete-route",
+            data={"instance": route_instance_name(agent_id, module_id=os.environ.get("MODULE_ID"))},
+        )
+        agent.assert_exp(response["exit_code"] == 0)
     run(["systemctl", "--user", "disable", "--now", service_unit(agent_id)], check=False)
+    run(["podman", "pod", "rm", "--force", pod_name(agent_id)], check=False)
     run(["podman", "rm", "--force", container_name(agent_id)], check=False)
+    run(["podman", "rm", "--force", openwebui_container_name(agent_id)], check=False)
     remove_agent_state(agent_id)
 
 if AGENTS_DIR.exists():

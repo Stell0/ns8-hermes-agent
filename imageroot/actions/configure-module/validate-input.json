@@ -10,6 +10,15 @@
         "agents"
     ],
     "properties": {
+        "base_virtualhost": {
+            "type": "string",
+            "description": "Base virtualhost for agent WebUIs. When set, every agent gets a Traefik route at https://<host>/hermes-agent-N/ that forwards to its dedicated Open WebUI instance. Must be a valid fully qualified domain name or left empty to disable shared WebUI hosting.",
+            "format": "hostname",
+            "pattern": "\\.",
+            "not": {
+                "format": "ipv4"
+            }
+        },
         "agents": {
             "type": "array",
             "items": {
@@ -24,7 +33,8 @@
                 "properties": {
                     "id": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 30
                     },
                     "name": {
                         "type": "string",

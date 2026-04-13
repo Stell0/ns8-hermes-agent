@@ -11,15 +11,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 from hermes_agent_state import (
     AGENT_SECRET_KEY,
     ALLOWED_ROLES,
+    AGENT_OPENWEBUI_HOST_PORT_ENV,
+    API_SERVER_ENABLED_ENV,
+    API_SERVER_HOST,
+    API_SERVER_HOST_ENV,
+    API_SERVER_KEY,
+    API_SERVER_MODEL_NAME_ENV,
+    API_SERVER_PORT,
+    API_SERVER_PORT_ENV,
+    BASE_VIRTUALHOST_ENV,
     ENVIRONMENT_FILE,
     HOME_ENV_TEMPLATE,
+    OPENAI_API_BASE_URL_ENV,
+    OPENAI_API_KEY,
+    OPENWEBUI_NAME_ENV,
     SHARED_SECRETS_ENVFILE,
     SMTP_PUBLIC_KEYS,
     SMTP_SECRET_KEY,
     SOUL_TEMPLATE,
     agent_envfile,
     agent_home_dir,
+    agent_openwebui_data_dir,
+    agent_openwebui_envfile,
+    agent_openwebui_secrets_envfile,
     agent_secrets_envfile,
+    agent_webui_host_port,
     ensure_private_directory,
     generate_secret,
     read_agents_from_state,
@@ -127,7 +143,16 @@ def build_agent_public_env(agent_data, shared_environment):
         "AGENT_ROLE": agent_data["role"],
         "TIMEZONE": timezone_value(shared_environment),
         "TZ": timezone_value(shared_environment),
+        AGENT_OPENWEBUI_HOST_PORT_ENV: str(agent_webui_host_port(agent_data["id"], shared_environment)),
+        API_SERVER_ENABLED_ENV: "true",
+        API_SERVER_HOST_ENV: API_SERVER_HOST,
+        API_SERVER_PORT_ENV: str(API_SERVER_PORT),
+        API_SERVER_MODEL_NAME_ENV: agent_data["name"],
     }
+
+    base_virtualhost = (shared_environment.get(BASE_VIRTUALHOST_ENV) or "").strip().lower()
+    if base_virtualhost:
+        env_data[BASE_VIRTUALHOST_ENV] = base_virtualhost
 
     for key in SMTP_PUBLIC_KEYS:
         value = shared_environment.get(key)
@@ -137,9 +162,35 @@ def build_agent_public_env(agent_data, shared_environment):
     return env_data
 
 
+def build_openwebui_public_env(agent_data, shared_environment):
+    env_data = {
+        OPENAI_API_BASE_URL_ENV: f"http://{API_SERVER_HOST}:{API_SERVER_PORT}/v1",
+        OPENWEBUI_NAME_ENV: agent_data["name"],
+    }
+
+    base_virtualhost = (shared_environment.get(BASE_VIRTUALHOST_ENV) or "").strip().lower()
+    if base_virtualhost:
+        env_data["WEBUI_URL"] = f"https://{base_virtualhost}/hermes-agent-{agent_data['id']}/"
+
+    return env_data
+
+
+def build_openwebui_secrets(agent_secrets):
+    return {
+        OPENAI_API_KEY: agent_secrets[OPENAI_API_KEY],
+    }
+
+
 def build_agent_secrets(existing_agent_secrets, shared_secrets):
+    api_server_key = (
+        existing_agent_secrets.get(API_SERVER_KEY)
+        or existing_agent_secrets.get(OPENAI_API_KEY)
+        or generate_secret()
+    )
     env_data = {
         AGENT_SECRET_KEY: existing_agent_secrets.get(AGENT_SECRET_KEY) or generate_secret(),
+        API_SERVER_KEY: api_server_key,
+        OPENAI_API_KEY: api_server_key,
     }
 
     smtp_password = shared_secrets.get(SMTP_SECRET_KEY)
@@ -157,12 +208,19 @@ def sync_agent_runtime_files(agent_id=None):
     for agent_data in agent_data_list:
         existing_agent_env = read_envfile(agent_envfile(agent_data["id"]))
         seed_agent_home(agent_data, existing_agent_env)
+        ensure_private_directory(agent_openwebui_data_dir(agent_data["id"]))
         write_envfile(agent_envfile(agent_data["id"]), build_agent_public_env(agent_data, shared_environment))
+        write_envfile(
+            agent_openwebui_envfile(agent_data["id"]),
+            build_openwebui_public_env(agent_data, shared_environment),
+        )
         existing_agent_secrets = read_envfile(agent_secrets_envfile(agent_data["id"]))
+        agent_secrets = build_agent_secrets(existing_agent_secrets, shared_secrets)
         write_envfile(
             agent_secrets_envfile(agent_data["id"]),
-            build_agent_secrets(existing_agent_secrets, shared_secrets),
+            agent_secrets,
         )
+        write_envfile(agent_openwebui_secrets_envfile(agent_data["id"]), build_openwebui_secrets(agent_secrets))
 
 
 def main():

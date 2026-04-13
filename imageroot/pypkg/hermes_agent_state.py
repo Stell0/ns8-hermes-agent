@@ -14,6 +14,7 @@ SHARED_SECRETS_ENVFILE = Path("secrets.env")
 AGENTS_DIR = Path("agents")
 SOUL_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "SOUL.md.in"
 HOME_ENV_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "home.env.in"
+MAX_AGENTS = 30
 
 ALLOWED_ROLES = (
     "default",
@@ -30,7 +31,11 @@ NAME_PATTERN = re.compile(r"^[A-Za-z ]+$")
 AGENT_DIR_PATTERN = re.compile(r"^\d+$")
 AGENT_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)\.env$")
 AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_secrets\.env$")
+AGENT_OPENWEBUI_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_openwebui\.env$")
+AGENT_OPENWEBUI_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_openwebui_secrets\.env$")
 AGENT_SECRET_KEY = "HERMES_AGENT_SECRET"
+API_SERVER_KEY = "API_SERVER_KEY"
+OPENAI_API_KEY = "OPENAI_API_KEY"
 SMTP_PUBLIC_KEYS = (
     "SMTP_ENABLED",
     "SMTP_HOST",
@@ -42,6 +47,23 @@ SMTP_PUBLIC_KEYS = (
 SMTP_SECRET_KEY = "SMTP_PASSWORD"
 TIMEZONE_ENV = "TIMEZONE"
 TIMEZONE_DEFAULT = "UTC"
+TCP_PORT_ENV = "TCP_PORT"
+TCP_PORTS_ENV = "TCP_PORTS"
+TCP_PORTS_RANGE_ENV = "TCP_PORTS_RANGE"
+BASE_VIRTUALHOST_ENV = "BASE_VIRTUALHOST"
+AGENT_OPENWEBUI_HOST_PORT_ENV = "AGENT_OPENWEBUI_HOST_PORT"
+API_SERVER_ENABLED_ENV = "API_SERVER_ENABLED"
+API_SERVER_HOST_ENV = "API_SERVER_HOST"
+API_SERVER_PORT_ENV = "API_SERVER_PORT"
+API_SERVER_MODEL_NAME_ENV = "API_SERVER_MODEL_NAME"
+OPENAI_API_BASE_URL_ENV = "OPENAI_API_BASE_URL"
+OPENWEBUI_NAME_ENV = "WEBUI_NAME"
+API_SERVER_HOST = "127.0.0.1"
+API_SERVER_PORT = 8642
+OPENWEBUI_PORT = 8080
+BASE_VIRTUALHOST_PATTERN = re.compile(
+    r"^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$"
+)
 
 
 def ensure_private_directory(path):
@@ -166,6 +188,14 @@ def agent_secrets_envfile(agent_id):
     return Path(f"agent_{agent_id}_secrets.env")
 
 
+def agent_openwebui_envfile(agent_id):
+    return Path(f"agent_{agent_id}_openwebui.env")
+
+
+def agent_openwebui_secrets_envfile(agent_id):
+    return Path(f"agent_{agent_id}_openwebui_secrets.env")
+
+
 def service_unit(agent_id):
     return f"hermes-agent@{agent_id}.service"
 
@@ -174,12 +204,134 @@ def container_name(agent_id):
     return f"hermes-agent-{agent_id}"
 
 
+def openwebui_container_name(agent_id):
+    return f"openwebui-agent-{agent_id}"
+
+
+def pod_name(agent_id):
+    return f"hermes-pod-agent-{agent_id}"
+
+
+def agent_openwebui_data_dir(agent_id):
+    return agent_dir(agent_id) / "open-webui"
+
+
+def route_instance_name(agent_id, module_id=None, shared_environment=None):
+    if shared_environment is None:
+        shared_environment = read_envfile(ENVIRONMENT_FILE)
+
+    module_value = module_id or shared_environment.get("MODULE_ID") or os.getenv("MODULE_ID")
+    if not module_value:
+        raise ValueError("MODULE_ID is required to derive route instance names")
+
+    return f"{module_value}-hermes-agent-{agent_id}"
+
+
+def route_path(agent_id):
+    return f"/hermes-agent-{agent_id}"
+
+
 def timezone_value(shared_environment=None):
     if shared_environment is None:
         shared_environment = read_envfile(ENVIRONMENT_FILE)
 
     value = (shared_environment.get(TIMEZONE_ENV) or TIMEZONE_DEFAULT).strip()
     return value or TIMEZONE_DEFAULT
+
+
+def base_virtualhost_value(shared_environment=None):
+    if shared_environment is None:
+        shared_environment = read_envfile(ENVIRONMENT_FILE)
+
+    return (shared_environment.get(BASE_VIRTUALHOST_ENV) or "").strip().lower()
+
+
+def validate_base_virtualhost(value):
+    normalized_value = (value or "").strip().lower()
+    if not normalized_value:
+        return ""
+
+    if not BASE_VIRTUALHOST_PATTERN.fullmatch(normalized_value):
+        raise ValueError("invalid base_virtualhost")
+
+    return normalized_value
+
+
+def parse_tcp_ports_range(port_range):
+    normalized_range = (port_range or "").strip()
+    if not normalized_range:
+        raise ValueError(f"missing {TCP_PORTS_RANGE_ENV} in environment")
+
+    start_text, separator, end_text = normalized_range.partition("-")
+    if not separator:
+        raise ValueError(f"invalid {TCP_PORTS_RANGE_ENV} value: {normalized_range}")
+
+    return int(start_text), int(end_text)
+
+
+def build_tcp_ports_environment(start_port, end_port, ports_demand):
+    if end_port - start_port + 1 < ports_demand:
+        raise ValueError(f"{TCP_PORTS_RANGE_ENV} must contain at least {ports_demand} ports")
+
+    environment = {TCP_PORT_ENV: str(start_port)}
+    if ports_demand > 1:
+        environment[TCP_PORTS_RANGE_ENV] = f"{start_port}-{end_port}"
+    if 1 < ports_demand <= 8:
+        environment[TCP_PORTS_ENV] = ",".join(
+            str(port) for port in range(start_port, end_port + 1)
+        )
+
+    return environment
+
+
+def ensure_tcp_ports_environment(shared_environment=None, ports_demand=MAX_AGENTS, allocate_ports=None):
+    if shared_environment is None:
+        shared_environment = read_envfile(ENVIRONMENT_FILE)
+
+    try:
+        start_port, end_port = parse_tcp_ports_range(shared_environment.get(TCP_PORTS_RANGE_ENV))
+    except ValueError:
+        start_port = None
+        end_port = None
+
+    if start_port is not None and end_port is not None and end_port - start_port + 1 >= ports_demand:
+        expected_environment = build_tcp_ports_environment(
+            start_port=start_port,
+            end_port=end_port,
+            ports_demand=ports_demand,
+        )
+        env_patch = {}
+        for env_key, env_value in expected_environment.items():
+            if shared_environment.get(env_key) != env_value:
+                env_patch[env_key] = env_value
+        return env_patch
+
+    if allocate_ports is None:
+        raise ValueError("allocate_ports callback is required")
+
+    allocated_range = allocate_ports(ports_demand, "tcp")
+    if not isinstance(allocated_range, (list, tuple)) or len(allocated_range) != 2:
+        raise ValueError("allocate_ports returned an invalid port range")
+
+    return build_tcp_ports_environment(
+        start_port=int(allocated_range[0]),
+        end_port=int(allocated_range[1]),
+        ports_demand=ports_demand,
+    )
+
+
+def agent_webui_host_port(agent_id, shared_environment=None):
+    if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
+        raise ValueError(f"agent id must be between 1 and {MAX_AGENTS}")
+
+    if shared_environment is None:
+        shared_environment = read_envfile(ENVIRONMENT_FILE)
+
+    start_port, end_port = parse_tcp_ports_range(shared_environment.get(TCP_PORTS_RANGE_ENV))
+    if end_port - start_port + 1 < MAX_AGENTS:
+        raise ValueError(f"{TCP_PORTS_RANGE_ENV} must contain at least {MAX_AGENTS} ports")
+
+    return start_port + agent_id - 1
 
 
 def validate_agents(raw_agents):
@@ -204,7 +356,7 @@ def validate_agents(raw_agents):
             )
 
         agent_id = raw_agent.get("id")
-        if not isinstance(agent_id, int) or agent_id < 1:
+        if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
             raise ValueError(f"agent at index {index} has an invalid id")
         if agent_id in seen_ids:
             raise ValueError(f"agent id {agent_id} is duplicated")
@@ -267,7 +419,12 @@ def list_known_agent_ids():
                 ids.add(int(path.name))
 
     for path in Path(".").iterdir():
-        for pattern in (AGENT_ENVFILE_PATTERN, AGENT_SECRETS_ENVFILE_PATTERN):
+        for pattern in (
+            AGENT_ENVFILE_PATTERN,
+            AGENT_SECRETS_ENVFILE_PATTERN,
+            AGENT_OPENWEBUI_ENVFILE_PATTERN,
+            AGENT_OPENWEBUI_SECRETS_ENVFILE_PATTERN,
+        ):
             match = pattern.fullmatch(path.name)
             if match:
                 ids.add(int(match.group(1)))
@@ -286,7 +443,12 @@ def actual_agent_status(agent_id):
 
 
 def remove_agent_state(agent_id):
-    for path in (agent_envfile(agent_id), agent_secrets_envfile(agent_id)):
+    for path in (
+        agent_envfile(agent_id),
+        agent_secrets_envfile(agent_id),
+        agent_openwebui_envfile(agent_id),
+        agent_openwebui_secrets_envfile(agent_id),
+    ):
         if path.exists():
             path.unlink()
 
