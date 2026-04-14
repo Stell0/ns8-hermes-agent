@@ -16,8 +16,6 @@ from hermes_agent_state import (
     AGENTS_DIR,
     container_name,
     list_known_agent_ids,
-    openwebui_container_name,
-    pod_name,
     remove_agent_state,
     route_instance_name,
     service_unit,
@@ -42,9 +40,7 @@ for agent_id in list_known_agent_ids():
         )
         agent.assert_exp(response["exit_code"] == 0)
     run(["systemctl", "--user", "disable", "--now", service_unit(agent_id)], check=False)
-    run(["podman", "pod", "rm", "--force", pod_name(agent_id)], check=False)
     run(["podman", "rm", "--force", container_name(agent_id)], check=False)
-    run(["podman", "rm", "--force", openwebui_container_name(agent_id)], check=False)
     remove_agent_state(agent_id)
 
 if AGENTS_DIR.exists():

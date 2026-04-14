@@ -36,7 +36,6 @@ build_component_image() {
 
 component_images=(
     "${repobase}/hermes-agent-hermes:${imagetag}"
-    "${repobase}/hermes-agent-open-webui:${imagetag}"
 )
 
 # Create a new empty container image
@@ -56,7 +55,6 @@ buildah run \
     sh -c "yarn install && yarn build"
 
 build_component_image "hermes-agent-hermes" "containers/hermes"
-build_component_image "hermes-agent-open-webui" "containers/open-webui"
 
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot

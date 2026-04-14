@@ -91,7 +91,7 @@
                         {{ $t("settings.status") }}
                       </cv-structured-list-heading>
                       <cv-structured-list-heading>
-                        {{ $t("settings.webui") }}
+                        {{ $t("settings.dashboard") }}
                       </cv-structured-list-heading>
                       <cv-structured-list-heading>
                         {{ $t("settings.actions") }}
@@ -118,14 +118,14 @@
                         </cv-structured-list-data>
                         <cv-structured-list-data class="break-word">
                           <cv-link
-                            v-if="agentWebuiUrl(agentData)"
-                            :href="agentWebuiUrl(agentData)"
+                            v-if="agentDashboardUrl(agentData)"
+                            :href="agentDashboardUrl(agentData)"
                             target="_blank"
                           >
-                            {{ agentWebuiUrl(agentData) }}
+                            {{ agentDashboardUrl(agentData) }}
                           </cv-link>
                           <span v-else>{{
-                            $t("settings.webui_not_configured")
+                            $t("settings.dashboard_not_configured")
                           }}</span>
                         </cv-structured-list-data>
                         <cv-structured-list-data
@@ -681,7 +681,7 @@ export default {
 
       return true;
     },
-    agentWebuiUrl(agentData) {
+    agentDashboardUrl(agentData) {
       const normalizedBaseVirtualhost = this.normalizeBaseVirtualhost();
       if (!normalizedBaseVirtualhost) {
         return "";

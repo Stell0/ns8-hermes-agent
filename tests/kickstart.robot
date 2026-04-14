@@ -40,27 +40,21 @@ Check if one started agent creates one runtime
     ${agent_runtime_status} =    Evaluate    json.loads(r'''${output}''')['agents'][0]['runtime_status']    json
 
     ${agent_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1.env' -print -quit
-    ${agent_openwebui_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1_openwebui.env' -print -quit
     ${agent_secrets} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1_secrets.env' -print -quit
     ${agent_metadata} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/metadata.json' -print -quit
     ${agent_soul} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/home/SOUL.md' -print -quit
     ${agent_home_env} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/home/.env' -print -quit
-    ${agent_openwebui_data} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/open-webui' -type d -print -quit
+    ${generated_env_count} =    Execute Command    find ${module_home} -maxdepth 8 -regextype posix-extended -regex '.*/agent_1(_secrets)?\.env' | wc -l
     ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent@1.service'
     ...    return_rc=True
+    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -c "^hermes-agent-" || true'
     ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-1'
-    ...    return_rc=True  return_stdout=False
-    ${openwebui_container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists openwebui-agent-1'
-    ...    return_rc=True  return_stdout=False
-    ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-pod-agent-1'
     ...    return_rc=True  return_stdout=False
     ${agent_name_env} =    Execute Command    grep '^AGENT_NAME=' ${agent_env} | cut -d= -f2-
     ${agent_role_env} =    Execute Command    grep '^AGENT_ROLE=' ${agent_env} | cut -d= -f2-
-    ${agent_openwebui_port} =    Execute Command    grep '^AGENT_OPENWEBUI_HOST_PORT=' ${agent_env} | cut -d= -f2-
+    ${agent_dashboard_port} =    Execute Command    grep '^AGENT_DASHBOARD_HOST_PORT=' ${agent_env} | cut -d= -f2-
     ${agent_secret} =    Execute Command    grep '^HERMES_AGENT_SECRET=' ${agent_secrets} | cut -d= -f2-
-    ${api_server_key} =    Execute Command    grep '^API_SERVER_KEY=' ${agent_secrets} | cut -d= -f2-
-    ${openai_api_key} =    Execute Command    grep '^OPENAI_API_KEY=' ${agent_secrets} | cut -d= -f2-
-    ${openwebui_api_base} =    Execute Command    grep '^OPENAI_API_BASE_URL=' ${agent_openwebui_env} | cut -d= -f2-
+    ${secret_key_count} =    Execute Command    grep -Ec '^(HERMES_AGENT_SECRET|SMTP_PASSWORD)=' ${agent_secrets}
     ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-agent-1"}'
     ${route_host} =    Evaluate    json.loads(r'''${route_output}''')['host']    json
     ${route_path} =    Evaluate    json.loads(r'''${route_output}''')['path']    json
@@ -68,26 +62,23 @@ Check if one started agent creates one runtime
     ${home_env_content} =    Execute Command    cat ${agent_home_env}
 
     Should Not Be Empty    ${agent_env}
-    Should Not Be Empty    ${agent_openwebui_env}
     Should Not Be Empty    ${agent_secrets}
     Should Not Be Empty    ${agent_metadata}
     Should Not Be Empty    ${agent_soul}
     Should Not Be Empty    ${agent_home_env}
-    Should Not Be Empty    ${agent_openwebui_data}
+    Should Be Equal    ${generated_env_count}    2
     Should Be Equal    ${base_virtualhost}    agents.example.test
     Should Be Equal    ${agent_status}    start
     Should Be Equal    ${agent_runtime_status}    start
     Should Be Equal As Integers    ${service_rc}    0
+    Should Be Equal    ${running_containers}    1
     Should Be Equal As Integers    ${container_rc}    0
-    Should Be Equal As Integers    ${openwebui_container_rc}    0
-    Should Be Equal As Integers    ${pod_rc}    0
     Should Be Equal    ${service_output}    active
     Should Be Equal    ${agent_name_env}    Foo Bar
     Should Be Equal    ${agent_role_env}    developer
-    Should Not Be Empty    ${agent_openwebui_port}
+    Should Not Be Empty    ${agent_dashboard_port}
     Should Not Be Empty    ${agent_secret}
-    Should Be Equal    ${api_server_key}    ${openai_api_key}
-    Should Be Equal    ${openwebui_api_base}    http://127.0.0.1:8642/v1
+    Should Be Equal    ${secret_key_count}    1
     Should Be Equal    ${route_host}    agents.example.test
     Should Be Equal    ${route_path}    /hermes-agent-1
     Should Contain    ${soul_content}    Your name is Foo Bar, you are an Hermes Agent that runs on NethServer8
@@ -104,17 +95,16 @@ Check if stopped agent disables runtime but keeps files
     ${agent_runtime_status} =    Evaluate    json.loads(r'''${output}''')['agents'][0]['runtime_status']    json
     ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent@1.service'
     ...    return_rc=True
+    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -c "^hermes-agent-" || true'
     ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-1'
-    ...    return_rc=True  return_stdout=False
-    ${openwebui_container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists openwebui-agent-1'
     ...    return_rc=True  return_stdout=False
     ${agent_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1.env' -print -quit
     ${agent_soul} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/home/SOUL.md' -print -quit
     Should Be Equal    ${agent_status}    stop
     Should Be Equal    ${agent_runtime_status}    stop
     Should Not Be Equal As Integers    ${service_rc}    0
+    Should Be Equal    ${running_containers}    0
     Should Not Be Equal As Integers    ${container_rc}    0
-    Should Not Be Equal As Integers    ${openwebui_container_rc}    0
     Should Not Be Empty    ${agent_env}
     Should Not Be Empty    ${agent_soul}
     Should Be Equal    ${service_output}    inactive
@@ -128,22 +118,21 @@ Check if deleting agent cleans runtime files
     ${agent_count} =    Evaluate    len(json.loads(r'''${output}''')['agents'])    json
     ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes-agent@1.service'
     ...    return_rc=True
+    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -c "^hermes-agent-" || true'
     ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-agent-1'
     ...    return_rc=True  return_stdout=False
-    ${openwebui_container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists openwebui-agent-1'
-    ...    return_rc=True  return_stdout=False
     ${agent_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1.env' -print -quit
-    ${agent_openwebui_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1_openwebui.env' -print -quit
+    ${generated_env_count} =    Execute Command    find ${module_home} -maxdepth 8 -regextype posix-extended -regex '.*/agent_1(_secrets)?\.env' | wc -l
     ${agent_secrets} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1_secrets.env' -print -quit
     ${agent_metadata} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/metadata.json' -print -quit
     ${agent_soul} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/home/SOUL.md' -print -quit
     ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-agent-1"}'
     Should Be Equal As Integers    ${agent_count}    0
     Should Not Be Equal As Integers    ${service_rc}    0
+    Should Be Equal    ${running_containers}    0
     Should Not Be Equal As Integers    ${container_rc}    0
-    Should Not Be Equal As Integers    ${openwebui_container_rc}    0
     Should Be Empty    ${agent_env}
-    Should Be Empty    ${agent_openwebui_env}
+    Should Be Equal    ${generated_env_count}    0
     Should Be Empty    ${agent_secrets}
     Should Be Empty    ${agent_metadata}
     Should Be Empty    ${agent_soul}

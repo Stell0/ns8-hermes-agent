@@ -69,8 +69,8 @@ Use these when the question is about Telegram, Discord, Slack, WhatsApp, Signal,
 
 * [Messaging Gateway](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/)
 * [Email adapter](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/email)
-* [Open WebUI integration](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/open-webui/) — relevant when the user asks for a web UI.
-* Platform-specific pages under the messaging section. The docs list Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Home Assistant, Mattermost, Matrix, DingTalk, Feishu/Lark, WeCom, Open WebUI, and Webhooks. ([hermes-agent.nousresearch.com][12])
+* [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard/) — relevant when the user asks for a browser-based admin UI.
+* Platform-specific pages under the messaging section. The docs list Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Home Assistant, Mattermost, Matrix, DingTalk, Feishu/Lark, WeCom, and Webhooks. ([hermes-agent.nousresearch.com][12])
 
 ### Docker / containerized deployment
 
@@ -206,7 +206,7 @@ Use:
 * In Docker mode, `/opt/data` is the persistent state directory, and the docs map it to the host `~/.hermes/`. ([hermes-agent.nousresearch.com][13])
 * Hermes configuration is split primarily between `config.yaml` for non-secret settings and `.env` for secrets. ([hermes-agent.nousresearch.com][20])
 * Hermes supports profiles via `HERMES_HOME`, and code/docs explicitly warn against hardcoding `~/.hermes` paths. ([GitHub][21])
-* The docs currently present Hermes as supporting a broad platform set including Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Mattermost, Matrix, DingTalk, Feishu/Lark, WeCom, Open WebUI, and others. ([hermes-agent.nousresearch.com][12])
+* The docs currently present Hermes as supporting a broad platform set including Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Mattermost, Matrix, DingTalk, Feishu/Lark, WeCom, and others. ([hermes-agent.nousresearch.com][12])
 
 ## 8) Suggested default source priority for an answering agent
 

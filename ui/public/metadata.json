@@ -1,7 +1,7 @@
 {
   "name": "hermes-agent",
   "description": {
-    "en": "Manage Hermes agents and publish one Open WebUI per agent on NethServer 8"
+    "en": "Manage Hermes agents and publish one Hermes dashboard per agent on NethServer 8"
   },
   "categories": [],
   "authors": [

@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
 SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-agent@.service"
+HERMES_CONTAINERFILE_PATH = ROOT / "containers" / "hermes" / "Containerfile"
 CREATE_MODULE_PATH = ROOT / "imageroot" / "actions" / "create-module" / "20create"
 CONFIGURE_MODULE_PATH = ROOT / "imageroot" / "actions" / "configure-module" / "20configure"
 DESTROY_MODULE_PATH = ROOT / "imageroot" / "actions" / "destroy-module" / "20destroy"
@@ -198,6 +199,16 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("EnvironmentFile=-%S/state/hosts", service_template)
         self.assertNotIn("$PODMAN_ADD_HOST_ARGS", service_template)
         self.assertNotIn("--restart=always", service_template)
+        self.assertNotIn("--pod ", service_template)
+        self.assertIn("AGENT_DASHBOARD_HOST_PORT", service_template)
+        self.assertIn("--name hermes-agent-%i", service_template)
+        self.assertIn("--env-file %S/state/agent_%i.env", service_template)
+        self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
+
+    def test_hermes_containerfile_uses_expected_base_image(self):
+        containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:0.0.9", containerfile)
 
     def test_write_envfile_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -230,28 +241,35 @@ class HermesModuleStateTest(unittest.TestCase):
             self.sync.sync_agent_runtime_files()
 
             public_env = self.state.read_envfile(self.state.agent_envfile(1))
-            openwebui_env = self.state.read_envfile(self.state.agent_openwebui_envfile(1))
-            openwebui_secrets = self.state.read_envfile(self.state.agent_openwebui_secrets_envfile(1))
             agent_secrets = self.state.read_envfile(self.state.agent_secrets_envfile(1))
             soul_path = self.state.agent_home_dir(1) / "SOUL.md"
             home_env_path = self.state.agent_home_dir(1) / ".env"
-            openwebui_data_dir = self.state.agent_openwebui_data_dir(1)
 
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
             self.assertEqual(public_env["AGENT_ROLE"], "developer")
             self.assertEqual(public_env["SMTP_HOST"], "smtp.example.org")
-            self.assertEqual(public_env["AGENT_OPENWEBUI_HOST_PORT"], "20001")
-            self.assertEqual(public_env["API_SERVER_ENABLED"], "true")
-            self.assertEqual(public_env["API_SERVER_HOST"], "127.0.0.1")
-            self.assertEqual(public_env["API_SERVER_PORT"], "8642")
+            self.assertEqual(public_env["AGENT_DASHBOARD_HOST_PORT"], "20001")
+            self.assertEqual(
+                set(public_env),
+                {
+                    "AGENT_DASHBOARD_HOST_PORT",
+                    "AGENT_ID",
+                    "AGENT_NAME",
+                    "AGENT_ROLE",
+                    "BASE_VIRTUALHOST",
+                    "SMTP_ENABLED",
+                    "SMTP_HOST",
+                    "TIMEZONE",
+                    "TZ",
+                },
+            )
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
-            self.assertEqual(agent_secrets["API_SERVER_KEY"], agent_secrets["OPENAI_API_KEY"])
-            self.assertEqual(openwebui_env["OPENAI_API_BASE_URL"], "http://127.0.0.1:8642/v1")
-            self.assertEqual(openwebui_env["WEBUI_NAME"], "Alice User")
-            self.assertEqual(openwebui_env["WEBUI_URL"], "https://agents.example.org/hermes-agent-1/")
-            self.assertEqual(openwebui_secrets, {"OPENAI_API_KEY": agent_secrets["OPENAI_API_KEY"]})
-            self.assertTrue(openwebui_data_dir.is_dir())
+            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(
+                sorted(path.name for path in Path(".").glob("agent_1*.env")),
+                ["agent_1.env", "agent_1_secrets.env"],
+            )
             self.assertIn(
                 "Your name is Alice User, you are an Hermes Agent that runs on NethServer8",
                 soul_path.read_text(encoding="utf-8"),
@@ -390,8 +408,6 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.state.agent_secrets_envfile(3),
                 {
                     "HERMES_AGENT_SECRET": "preserved",
-                    "API_SERVER_KEY": "persisted-api-key",
-                    "OPENAI_API_KEY": "persisted-api-key",
                     "SMTP_PASSWORD": "old-pass",
                 },
             )
@@ -401,9 +417,8 @@ class HermesModuleStateTest(unittest.TestCase):
 
             agent_secrets = self.state.read_envfile(self.state.agent_secrets_envfile(3))
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], "preserved")
-            self.assertEqual(agent_secrets["API_SERVER_KEY"], "persisted-api-key")
-            self.assertEqual(agent_secrets["OPENAI_API_KEY"], "persisted-api-key")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
+            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
 
     def test_ensure_tcp_ports_environment_keeps_existing_valid_range(self):
         allocator = mock.Mock()
@@ -523,9 +538,7 @@ class HermesModuleStateTest(unittest.TestCase):
                             ["systemctl", "--user", "disable", "--now", "hermes-agent@2.service"],
                             check=False,
                         ),
-                        mock.call(["podman", "pod", "rm", "--force", "hermes-pod-agent-2"], check=False),
                         mock.call(["podman", "rm", "--force", "hermes-agent-2"], check=False),
-                        mock.call(["podman", "rm", "--force", "openwebui-agent-2"], check=False),
                         mock.call(["runagent", "discover-smarthost"], check=True),
                         mock.call(["runagent", "sync-agent-runtime"], check=True),
                         mock.call(["systemctl", "--user", "daemon-reload"], check=True),
@@ -540,7 +553,7 @@ class HermesModuleStateTest(unittest.TestCase):
             else:
                 del sys.modules["agent"]
 
-    def test_configure_module_sets_traefik_routes_for_webui(self):
+    def test_configure_module_sets_traefik_routes_for_dashboard(self):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
@@ -616,7 +629,7 @@ class HermesModuleStateTest(unittest.TestCase):
             elif "agent.tasks" in sys.modules:
                 del sys.modules["agent.tasks"]
 
-    def test_destroy_module_removes_routes_and_runtime_for_openwebui_only_state(self):
+    def test_destroy_module_removes_routes_and_runtime_for_known_agent_state(self):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
@@ -632,12 +645,12 @@ class HermesModuleStateTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
                 self.state.write_envfile(
-                    self.state.agent_openwebui_envfile(4),
-                    {"OPENAI_API_BASE_URL": "http://127.0.0.1:8642/v1"},
+                    self.state.agent_envfile(4),
+                    {"AGENT_NAME": "Route Agent"},
                 )
                 self.state.write_envfile(
-                    self.state.agent_openwebui_secrets_envfile(4),
-                    {"OPENAI_API_KEY": "persisted-api-key"},
+                    self.state.agent_secrets_envfile(4),
+                    {"HERMES_AGENT_SECRET": "persisted-secret"},
                 )
 
                 with mock.patch.dict(os.environ, {"MODULE_ID": "hermes-agent1"}, clear=False), mock.patch(
@@ -658,13 +671,11 @@ class HermesModuleStateTest(unittest.TestCase):
                             ["systemctl", "--user", "disable", "--now", "hermes-agent@4.service"],
                             check=False,
                         ),
-                        mock.call(["podman", "pod", "rm", "--force", "hermes-pod-agent-4"], check=False),
                         mock.call(["podman", "rm", "--force", "hermes-agent-4"], check=False),
-                        mock.call(["podman", "rm", "--force", "openwebui-agent-4"], check=False),
                     ],
                 )
-                self.assertFalse(self.state.agent_openwebui_envfile(4).exists())
-                self.assertFalse(self.state.agent_openwebui_secrets_envfile(4).exists())
+                self.assertFalse(self.state.agent_envfile(4).exists())
+                self.assertFalse(self.state.agent_secrets_envfile(4).exists())
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent

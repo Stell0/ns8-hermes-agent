@@ -10,7 +10,7 @@ This document maps the current layout.
 - `NS8-MODULE.md`: implementation-oriented NS8 lifecycle notes.
 - `NS8_RESOURCE_MAP.md`: NS8 reference index.
 - `HERMES_RESOURCE_MAP.md`: Hermes reference index.
-- `build-images.sh`: builds the module image plus the Hermes and Open WebUI wrapper images.
+- `build-images.sh`: builds the module image plus the Hermes wrapper image.
 - `test-module.sh`: runs the module test suite.
 - `renovate.json`: Renovate configuration.
 
@@ -25,14 +25,14 @@ This document maps the current layout.
 - `create-module/20create`: initializes `TIMEZONE`, creates base state files and directories, and discovers smarthost settings.
 - `configure-module/20configure`: validates the submitted `base_virtualhost` and agent list, stores one metadata file per agent, synchronizes runtime files, reconciles managed Traefik routes, and reconciles per-agent services.
 - `configure-module/validate-input.json`: input schema for the shared `base_virtualhost` plus the Hermes `agents` payload.
-- `get-configuration/20read`: returns the shared WebUI virtualhost plus configured agents with actual runtime status from systemd.
-- `get-configuration/validate-output.json`: output schema for the shared WebUI virtualhost plus the Hermes `agents` response.
-- `destroy-module/20destroy`: stops services, removes pods and containers, deletes managed routes, and deletes generated per-agent files and directories.
+- `get-configuration/20read`: returns the shared dashboard virtualhost plus configured agents with actual runtime status from systemd.
+- `get-configuration/validate-output.json`: output schema for the shared dashboard virtualhost plus the Hermes `agents` response.
+- `destroy-module/20destroy`: stops services, removes containers, deletes managed routes, and deletes generated per-agent files and directories.
 
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets.env`.
-- `sync-agent-runtime`: writes `agent_<id>.env`, `agent_<id>_openwebui.env`, `agent_<id>_secrets.env`, and `agent_<id>_openwebui_secrets.env`, seeds each Hermes home from the checked-in role-specific SOUL templates plus the default home env template, and prepares each Open WebUI data directory.
+- `sync-agent-runtime`: writes `agent_<id>.env` and `agent_<id>_secrets.env`, and seeds each Hermes home from the checked-in role-specific SOUL templates plus the default home env template.
 
 ### `imageroot/events/`
 
@@ -57,8 +57,9 @@ This document maps the current layout.
 
 ## `containers/`
 
-- `containers/hermes/Containerfile`: Hermes wrapper image that keeps the upstream Hermes entrypoint and defaults to gateway mode.
-- `containers/open-webui/Containerfile`: Open WebUI wrapper image used as the per-agent web frontend container.
+- `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:0.0.9`.
+- `containers/hermes/entrypoint.sh`: starts the Hermes gateway, Hermes dashboard, and local dashboard proxy inside the single runtime container.
+- `containers/hermes/hermes-dashboard-proxy.py`: rewrites path-prefixed Hermes dashboard traffic for Traefik routes.
 
 ## `ui/`
 
@@ -69,11 +70,11 @@ The embedded admin UI uses Vue 2 and Vue CLI.
 - `public/i18n/`: translation files.
 - `src/router/index.js`: routes for status, settings, and about.
 - `src/store/index.js`: embedded module context store.
-- `src/views/Settings.vue`: shared WebUI virtualhost configuration plus the agent list, create/edit/delete modals, and start/stop state management.
+- `src/views/Settings.vue`: shared dashboard virtualhost configuration plus the agent list, create/edit/delete modals, and start/stop state management.
 
 ## `tests/`
 
 - `__init__.robot`: Robot Framework initialization file.
 - `kickstart.robot`: end-to-end module lifecycle checks.
 - `pythonreq.txt`: Python dependencies for the test runner.
-- `test_runtime_validation.py`: focused unit tests for state helpers, route wiring, and runtime file seeding.
+- `test_runtime_validation.py`: focused unit tests for state helpers, route wiring, runtime file seeding, and the single-container runtime contract.

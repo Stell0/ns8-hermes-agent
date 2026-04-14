@@ -31,11 +31,7 @@ NAME_PATTERN = re.compile(r"^[A-Za-z ]+$")
 AGENT_DIR_PATTERN = re.compile(r"^\d+$")
 AGENT_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)\.env$")
 AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_secrets\.env$")
-AGENT_OPENWEBUI_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_openwebui\.env$")
-AGENT_OPENWEBUI_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_openwebui_secrets\.env$")
 AGENT_SECRET_KEY = "HERMES_AGENT_SECRET"
-API_SERVER_KEY = "API_SERVER_KEY"
-OPENAI_API_KEY = "OPENAI_API_KEY"
 SMTP_PUBLIC_KEYS = (
     "SMTP_ENABLED",
     "SMTP_HOST",
@@ -51,16 +47,8 @@ TCP_PORT_ENV = "TCP_PORT"
 TCP_PORTS_ENV = "TCP_PORTS"
 TCP_PORTS_RANGE_ENV = "TCP_PORTS_RANGE"
 BASE_VIRTUALHOST_ENV = "BASE_VIRTUALHOST"
-AGENT_OPENWEBUI_HOST_PORT_ENV = "AGENT_OPENWEBUI_HOST_PORT"
-API_SERVER_ENABLED_ENV = "API_SERVER_ENABLED"
-API_SERVER_HOST_ENV = "API_SERVER_HOST"
-API_SERVER_PORT_ENV = "API_SERVER_PORT"
-API_SERVER_MODEL_NAME_ENV = "API_SERVER_MODEL_NAME"
-OPENAI_API_BASE_URL_ENV = "OPENAI_API_BASE_URL"
-OPENWEBUI_NAME_ENV = "WEBUI_NAME"
-API_SERVER_HOST = "127.0.0.1"
-API_SERVER_PORT = 8642
-OPENWEBUI_PORT = 8080
+AGENT_DASHBOARD_HOST_PORT_ENV = "AGENT_DASHBOARD_HOST_PORT"
+DASHBOARD_PORT = 9119
 BASE_VIRTUALHOST_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$"
 )
@@ -195,32 +183,12 @@ def agent_secrets_envfile(agent_id):
     return Path(f"agent_{agent_id}_secrets.env")
 
 
-def agent_openwebui_envfile(agent_id):
-    return Path(f"agent_{agent_id}_openwebui.env")
-
-
-def agent_openwebui_secrets_envfile(agent_id):
-    return Path(f"agent_{agent_id}_openwebui_secrets.env")
-
-
 def service_unit(agent_id):
     return f"hermes-agent@{agent_id}.service"
 
 
 def container_name(agent_id):
     return f"hermes-agent-{agent_id}"
-
-
-def openwebui_container_name(agent_id):
-    return f"openwebui-agent-{agent_id}"
-
-
-def pod_name(agent_id):
-    return f"hermes-pod-agent-{agent_id}"
-
-
-def agent_openwebui_data_dir(agent_id):
-    return agent_dir(agent_id) / "open-webui"
 
 
 def route_instance_name(agent_id, module_id=None, shared_environment=None):
@@ -327,7 +295,7 @@ def ensure_tcp_ports_environment(shared_environment=None, ports_demand=MAX_AGENT
     )
 
 
-def agent_webui_host_port(agent_id, shared_environment=None):
+def agent_dashboard_host_port(agent_id, shared_environment=None):
     if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
         raise ValueError(f"agent id must be between 1 and {MAX_AGENTS}")
 
@@ -426,12 +394,7 @@ def list_known_agent_ids():
                 ids.add(int(path.name))
 
     for path in Path(".").iterdir():
-        for pattern in (
-            AGENT_ENVFILE_PATTERN,
-            AGENT_SECRETS_ENVFILE_PATTERN,
-            AGENT_OPENWEBUI_ENVFILE_PATTERN,
-            AGENT_OPENWEBUI_SECRETS_ENVFILE_PATTERN,
-        ):
+        for pattern in (AGENT_ENVFILE_PATTERN, AGENT_SECRETS_ENVFILE_PATTERN):
             match = pattern.fullmatch(path.name)
             if match:
                 ids.add(int(match.group(1)))
@@ -450,12 +413,7 @@ def actual_agent_status(agent_id):
 
 
 def remove_agent_state(agent_id):
-    for path in (
-        agent_envfile(agent_id),
-        agent_secrets_envfile(agent_id),
-        agent_openwebui_envfile(agent_id),
-        agent_openwebui_secrets_envfile(agent_id),
-    ):
+    for path in (agent_envfile(agent_id), agent_secrets_envfile(agent_id)):
         if path.exists():
             path.unlink()
 

@@ -1,3 +1,0 @@
-FROM ghcr.io/open-webui/open-webui:main
-LABEL org.opencontainers.image.title="hermes-agent-open-webui"
-LABEL org.opencontainers.image.description="Thin wrapper around the upstream Open WebUI runtime image"

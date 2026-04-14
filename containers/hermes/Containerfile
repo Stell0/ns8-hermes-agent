@@ -1,12 +1,25 @@
-FROM docker.io/nousresearch/hermes-agent:v2026.4.8
+FROM docker.io/nousresearch/hermes-agent:0.0.9
 LABEL org.opencontainers.image.title="hermes-agent-hermes"
 LABEL org.opencontainers.image.description="Thin wrapper around the upstream Hermes runtime image"
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
     curl \
     gh \
     git \
     python3-googleapi \
     python3-google-auth-oauthlib
 
+RUN pip install --no-cache-dir --break-system-packages \
+    ddgs \
+    fastapi \
+    pytesseract \
+    pdf2image \
+    uvicorn
+
+COPY entrypoint.sh /usr/local/bin/hermes-agent-entrypoint.sh
+COPY hermes-dashboard-proxy.py /usr/local/bin/hermes-dashboard-proxy.py
+
+RUN chmod 0755 /usr/local/bin/hermes-agent-entrypoint.sh /usr/local/bin/hermes-dashboard-proxy.py
+
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
-CMD ["gateway", "run"]
+CMD ["/usr/local/bin/hermes-agent-entrypoint.sh"]
