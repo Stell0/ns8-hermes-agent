@@ -12,7 +12,7 @@ from pathlib import Path
 ENVIRONMENT_FILE = Path("environment")
 SHARED_SECRETS_ENVFILE = Path("secrets.env")
 AGENTS_DIR = Path("agents")
-SOUL_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "SOUL.md.in"
+SOUL_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates" / "SOUL"
 HOME_ENV_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "home.env.in"
 MAX_AGENTS = 30
 
@@ -64,6 +64,13 @@ OPENWEBUI_PORT = 8080
 BASE_VIRTUALHOST_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$"
 )
+
+
+def soul_template_for_role(role):
+    if role not in ALLOWED_ROLES:
+        raise ValueError(f"invalid role: {role}")
+
+    return SOUL_TEMPLATES_DIR / f"{role}.md.in"
 
 
 def ensure_private_directory(path):
@@ -407,7 +414,7 @@ def read_agents_from_state():
 
         agents.append(metadata)
 
-    return agents
+    return validate_agents(agents)
 
 
 def list_known_agent_ids():

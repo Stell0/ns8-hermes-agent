@@ -46,7 +46,7 @@ The current implementation is intentionally small:
 - Hermes plus one Open WebUI companion container per configured agent.
 - One configured agent maps directly to one metadata file, one generated Hermes env file, one generated Open WebUI env file, one generated Hermes secrets env file, one generated Open WebUI secrets env file, one Hermes home directory, one Open WebUI data directory, one systemd user service, and one rootless Podman pod.
 - A fresh install is idle until at least one agent is configured with `status: start`.
-- `SOUL.md` and the default Hermes home `.env` are seeded from checked-in templates with `sed` placeholder replacement.
+- `SOUL.md` is seeded from a checked-in role-specific template, and the default Hermes home `.env` is seeded from its checked-in template with `sed` placeholder replacement; previously generated files are refreshed on agent name or role changes unless the operator customized them.
 - The module reserves a fixed pool of 30 TCP ports and supports at most 30 agents.
 
 ## Current behavior
@@ -140,7 +140,7 @@ That configuration will:
 
 - store `agents/1/metadata.json`
 - generate `agent_1.env`, `agent_1_openwebui.env`, `agent_1_secrets.env`, and `agent_1_openwebui_secrets.env`
-- seed `agents/1/home/SOUL.md` and `agents/1/home/.env` if they do not already exist
+- seed `agents/1/home/SOUL.md` from the template for the agent role and `agents/1/home/.env` from the default home env template, then refresh those files on later name or role changes only when they still match the previous generated content
 - create `agents/1/open-webui/` for Open WebUI persistent data
 - create or update the Traefik route `https://agents.example.org/hermes-agent-1/`
 - enable and start `hermes-agent@1.service`

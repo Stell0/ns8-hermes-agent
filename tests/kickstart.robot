@@ -90,7 +90,8 @@ Check if one started agent creates one runtime
     Should Be Equal    ${openwebui_api_base}    http://127.0.0.1:8642/v1
     Should Be Equal    ${route_host}    agents.example.test
     Should Be Equal    ${route_path}    /hermes-agent-1
-    Should Contain    ${soul_content}    Your name is Foo Bar.
+    Should Contain    ${soul_content}    Your name is Foo Bar, you are an Hermes Agent that runs on NethServer8
+    Should Contain    ${soul_content}    You are a pragmatic technical partner who values correctness, clarity, and operational reality.
     Should Contain    ${home_env_content}    AGENT_NAME=Foo Bar
 
 Check if stopped agent disables runtime but keeps files

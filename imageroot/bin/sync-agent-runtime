@@ -28,7 +28,6 @@ from hermes_agent_state import (
     SHARED_SECRETS_ENVFILE,
     SMTP_PUBLIC_KEYS,
     SMTP_SECRET_KEY,
-    SOUL_TEMPLATE,
     agent_envfile,
     agent_home_dir,
     agent_openwebui_data_dir,
@@ -40,6 +39,7 @@ from hermes_agent_state import (
     generate_secret,
     read_agents_from_state,
     read_envfile,
+    soul_template_for_role,
     timezone_value,
     write_envfile,
     write_private_textfile,
@@ -83,7 +83,13 @@ def build_template_replacements(agent_id, agent_name, agent_role):
     }
 
 
-def sync_seeded_file(template_path, target_path, replacements, previous_replacements=None):
+def sync_seeded_file(
+    template_path,
+    target_path,
+    replacements,
+    previous_replacements=None,
+    previous_template_path=None,
+):
     if target_path.is_symlink():
         target_path.unlink()
         render_template(template_path, target_path, replacements)
@@ -96,13 +102,16 @@ def sync_seeded_file(template_path, target_path, replacements, previous_replacem
     if previous_replacements is None:
         return
 
-    if target_path.read_text(encoding="utf-8") == render_template_content(template_path, previous_replacements):
+    previous_template = previous_template_path or template_path
+
+    if target_path.read_text(encoding="utf-8") == render_template_content(previous_template, previous_replacements):
         render_template(template_path, target_path, replacements)
 
 
 def seed_agent_home(agent_data, existing_agent_env):
     home_dir = agent_home_dir(agent_data["id"])
     ensure_private_directory(home_dir)
+    soul_template = soul_template_for_role(agent_data["role"])
     soul_replacements = build_template_replacements(
         agent_data["id"],
         agent_data["name"],
@@ -115,9 +124,11 @@ def seed_agent_home(agent_data, existing_agent_env):
     )
     previous_name = existing_agent_env.get("AGENT_NAME")
     previous_role = existing_agent_env.get("AGENT_ROLE")
+    previous_soul_template = None
     previous_soul_replacements = None
     previous_home_env_replacements = None
-    if previous_name and previous_role:
+    if previous_name and previous_role in ALLOWED_ROLES:
+        previous_soul_template = soul_template_for_role(previous_role)
         previous_soul_replacements = build_template_replacements(
             agent_data["id"],
             previous_name,
@@ -130,7 +141,13 @@ def seed_agent_home(agent_data, existing_agent_env):
         )
 
     soul_path = home_dir / "SOUL.md"
-    sync_seeded_file(SOUL_TEMPLATE, soul_path, soul_replacements, previous_soul_replacements)
+    sync_seeded_file(
+        soul_template,
+        soul_path,
+        soul_replacements,
+        previous_soul_replacements,
+        previous_template_path=previous_soul_template,
+    )
 
     home_env_path = home_dir / ".env"
     sync_seeded_file(HOME_ENV_TEMPLATE, home_env_path, home_env_replacements, previous_home_env_replacements)

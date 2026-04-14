@@ -32,7 +32,7 @@ This document maps the current layout.
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets.env`.
-- `sync-agent-runtime`: writes `agent_<id>.env`, `agent_<id>_openwebui.env`, `agent_<id>_secrets.env`, and `agent_<id>_openwebui_secrets.env`, seeds each Hermes home from the checked-in templates, and prepares each Open WebUI data directory.
+- `sync-agent-runtime`: writes `agent_<id>.env`, `agent_<id>_openwebui.env`, `agent_<id>_secrets.env`, and `agent_<id>_openwebui_secrets.env`, seeds each Hermes home from the checked-in role-specific SOUL templates plus the default home env template, and prepares each Open WebUI data directory.
 
 ### `imageroot/events/`
 
@@ -52,7 +52,7 @@ This document maps the current layout.
 
 ### `imageroot/templates/`
 
-- `SOUL.md.in`: checked-in template used to seed `SOUL.md` with `sed`.
+- `SOUL/`: checked-in role-specific templates used to seed `SOUL.md` with `sed`.
 - `home.env.in`: checked-in template used to seed the default Hermes home `.env` with `sed`.
 
 ## `containers/`

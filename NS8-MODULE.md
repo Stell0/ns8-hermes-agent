@@ -124,10 +124,11 @@ Hermes enables its API server on `127.0.0.1:8642` inside the pod. Hermes keeps t
 
 The module seeds two files into each agent home when they do not already exist:
 
-- `SOUL.md`, from `imageroot/templates/SOUL.md.in`
+- `SOUL.md`, from `imageroot/templates/SOUL/<role>.md.in`
 - `.env`, from `imageroot/templates/home.env.in`
 
 Placeholder replacement is performed with `sed` inside `sync-agent-runtime`.
+If a seeded `SOUL.md` or `.env` still matches the previously generated content, it is refreshed when the agent name or role changes; customized files are preserved.
 
 ## Action flow
 

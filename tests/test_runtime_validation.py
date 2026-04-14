@@ -74,6 +74,35 @@ class HermesModuleStateTest(unittest.TestCase):
 
                 self.assertEqual(agents[0]["role"], role)
 
+    def test_soul_template_lookup_accepts_supported_roles_and_rejects_invalid_role(self):
+        for role in self.state.ALLOWED_ROLES:
+            with self.subTest(role=role):
+                template_path = self.state.soul_template_for_role(role)
+
+                self.assertEqual(template_path.name, f"{role}.md.in")
+                self.assertTrue(template_path.is_file())
+
+        with self.assertRaisesRegex(ValueError, "invalid role"):
+            self.state.soul_template_for_role("invalid_role")
+
+    def test_read_agents_from_state_rejects_tampered_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.state.ensure_private_directory(self.state.AGENTS_DIR / "1")
+            (self.state.AGENTS_DIR / "1" / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "id": "../../outside",
+                        "name": "Alice User",
+                        "role": "developer",
+                        "status": "start",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "invalid id"):
+                self.state.read_agents_from_state()
+
     def test_validate_agents_rejects_unexpected_fields(self):
         with self.assertRaisesRegex(ValueError, "unexpected fields"):
             self.state.validate_agents(
@@ -223,7 +252,14 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(openwebui_env["WEBUI_URL"], "https://agents.example.org/hermes-agent-1/")
             self.assertEqual(openwebui_secrets, {"OPENAI_API_KEY": agent_secrets["OPENAI_API_KEY"]})
             self.assertTrue(openwebui_data_dir.is_dir())
-            self.assertIn("Your name is Alice User.", soul_path.read_text(encoding="utf-8"))
+            self.assertIn(
+                "Your name is Alice User, you are an Hermes Agent that runs on NethServer8",
+                soul_path.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "You are a pragmatic technical partner who values correctness, clarity, and operational reality.",
+                soul_path.read_text(encoding="utf-8"),
+            )
             self.assertIn("AGENT_NAME=Alice User", home_env_path.read_text(encoding="utf-8"))
             self.assertIn("AGENT_ROLE=developer", home_env_path.read_text(encoding="utf-8"))
 
@@ -272,9 +308,12 @@ class HermesModuleStateTest(unittest.TestCase):
             soul_path = self.state.agent_home_dir(2) / "SOUL.md"
             home_env_path = self.state.agent_home_dir(2) / ".env"
 
-            self.assertIn("Your name is Bob Renamed.", soul_path.read_text(encoding="utf-8"))
             self.assertIn(
-                "Your configured role is business consultant.",
+                "Your name is Bob Renamed, you are an Hermes Agent that runs on NethServer8",
+                soul_path.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "You are a business consultant who frames problems cleanly and turns ambiguity into decisions, priorities, and tradeoffs.",
                 soul_path.read_text(encoding="utf-8"),
             )
             self.assertIn("AGENT_NAME=Bob Renamed", home_env_path.read_text(encoding="utf-8"))
@@ -331,7 +370,10 @@ class HermesModuleStateTest(unittest.TestCase):
             self.sync.sync_agent_runtime_files(agent_id=4)
 
             self.assertFalse(soul_path.is_symlink())
-            self.assertIn("Your name is Dana Agent.", soul_path.read_text(encoding="utf-8"))
+            self.assertIn(
+                "Your name is Dana Agent, you are an Hermes Agent that runs on NethServer8",
+                soul_path.read_text(encoding="utf-8"),
+            )
             self.assertEqual(target_path.read_text(encoding="utf-8"), "do not overwrite\n")
 
     def test_sync_agent_runtime_files_preserves_existing_agent_secret(self):
