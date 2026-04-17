@@ -92,7 +92,7 @@ Build the module image and Hermes wrapper image with:
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:latest`.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.16`.
 
 The script uses:
 

@@ -208,7 +208,7 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:latest", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.4.16", containerfile)
 
     def test_write_envfile_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
