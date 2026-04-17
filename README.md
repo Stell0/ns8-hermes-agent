@@ -174,6 +174,7 @@ Each started agent runs:
 - one published dashboard port from the module-owned 30-port pool, forwarded to the container's Hermes dashboard on port `9119`
 
 Restart supervision is owned by the systemd user unit with `Restart=on-failure`; the Podman container launches do not set container-level restart policies.
+The service passes the module user's UID and GID into the Hermes entrypoint and uses a keep-id user namespace so the bind-mounted home stays owned by the NS8 module user across container restarts.
 The Hermes container reads `agent_<id>.env` and `agent_<id>_secrets.env`.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/hermes-agent-N/` to that container's Hermes web dashboard.
 

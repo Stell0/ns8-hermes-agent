@@ -202,6 +202,12 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("--pod ", service_template)
         self.assertIn("AGENT_DASHBOARD_HOST_PORT", service_template)
         self.assertIn("--name hermes-agent-%i", service_template)
+        self.assertIn("uid=$(id -u); gid=$(id -g)", service_template)
+        self.assertIn("--userns=keep-id", service_template)
+        self.assertIn("--user 0:0", service_template)
+        self.assertIn("--env HERMES_UID=${uid}", service_template)
+        self.assertIn("--env HERMES_GID=${gid}", service_template)
+        self.assertIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agent_%i.env", service_template)
         self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
 

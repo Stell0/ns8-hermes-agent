@@ -4,6 +4,7 @@
 - There is no OpenViking runtime, no hidden backend runtime, no shared target, and no `AGENTS_LIST` registry anymore.
 - The runtime contract is now: one configured agent equals one metadata file, one generated Hermes env file, one generated Hermes secrets env file, one Hermes home directory, one `hermes-agent@<id>.service`, and one rootless `hermes-agent-<id>` container that serves both gateway traffic and the Hermes web dashboard.
 - Keep restart ownership in systemd: `hermes-agent@<id>.service` handles restart policy, and the Podman container launch should not add container-level `--restart` policies.
+- Preserve bind-mounted home ownership: keep `--userns=keep-id`, continue passing `HERMES_UID` and `HERMES_GID` into the container entrypoint, and do not regress the runtime back to root-owned agent files across restarts.
 - Preserve the NS8 action model already used here: numbered executable action steps, JSON stdin for actions, JSON stdout for reads, and schema files beside the actions.
 - `environment` is shared NS8 state. Merge only managed keys and preserve core-managed values such as `HERMES_AGENT_HERMES_IMAGE`.
 - Keep module-wide secrets in `secrets.env`. Keep generated per-agent Hermes secrets in `agent_<id>_secrets.env`.
