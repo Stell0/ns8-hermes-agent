@@ -16,7 +16,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
+HOME_SEED_MODULE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_home_seed.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
+SEED_HOME_PATH = ROOT / "imageroot" / "bin" / "seed-agent-home"
 SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-agent@.service"
 HERMES_CONTAINERFILE_PATH = ROOT / "containers" / "hermes" / "Containerfile"
 CREATE_MODULE_PATH = ROOT / "imageroot" / "actions" / "create-module" / "20create"
@@ -56,7 +58,8 @@ def write_executable(path, content):
 class HermesModuleStateTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.state = load_module(STATE_PATH, "hermes_agent_state_under_test")
+        cls.state = load_module(STATE_PATH, "hermes_agent_state")
+        cls.home_seed = load_module(HOME_SEED_MODULE_PATH, "hermes_agent_home_seed")
         cls.sync = load_module(SYNC_PATH, "sync_agent_runtime_under_test")
 
     def test_validate_agents_accepts_supported_roles(self):
@@ -202,14 +205,12 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("--pod ", service_template)
         self.assertIn("AGENT_DASHBOARD_HOST_PORT", service_template)
         self.assertIn("--name hermes-agent-%i", service_template)
-        self.assertIn("uid=$(id -u); gid=$(id -g)", service_template)
         self.assertIn("--userns=keep-id", service_template)
-        self.assertIn("--user 0:0", service_template)
-        self.assertIn("--env HERMES_UID=${uid}", service_template)
-        self.assertIn("--env HERMES_GID=${gid}", service_template)
-        self.assertIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
+        self.assertIn("--volume hermes-agent-%i-home:/opt/data", service_template)
+        self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agent_%i.env", service_template)
         self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
+        self.assertIn("ExecStartPost=/usr/local/bin/runagent seed-agent-home --agent-id %i", service_template)
 
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
@@ -226,7 +227,7 @@ class HermesModuleStateTest(unittest.TestCase):
 
             self.assertEqual(Path("outside.env").read_text(encoding="utf-8"), "SAFE=1\n")
 
-    def test_sync_agent_runtime_files_seeds_home_and_env_files(self):
+    def test_sync_agent_runtime_files_writes_public_env_and_secrets(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
             self.state.write_jsonfile(
                 self.state.agent_metadata_path(1),
@@ -248,8 +249,6 @@ class HermesModuleStateTest(unittest.TestCase):
 
             public_env = self.state.read_envfile(self.state.agent_envfile(1))
             agent_secrets = self.state.read_envfile(self.state.agent_secrets_envfile(1))
-            soul_path = self.state.agent_home_dir(1) / "SOUL.md"
-            home_env_path = self.state.agent_home_dir(1) / ".env"
 
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
             self.assertEqual(public_env["AGENT_ROLE"], "developer")
@@ -276,62 +275,70 @@ class HermesModuleStateTest(unittest.TestCase):
                 sorted(path.name for path in Path(".").glob("agent_1*.env")),
                 ["agent_1.env", "agent_1_secrets.env"],
             )
-            self.assertIn(
-                "Your name is Alice User, you are an Hermes Agent that runs on NethServer8",
-                soul_path.read_text(encoding="utf-8"),
-            )
-            self.assertIn(
-                "You are a pragmatic technical partner who values correctness, clarity, and operational reality.",
-                soul_path.read_text(encoding="utf-8"),
-            )
-            self.assertIn("AGENT_NAME=Alice User", home_env_path.read_text(encoding="utf-8"))
-            self.assertIn("AGENT_ROLE=developer", home_env_path.read_text(encoding="utf-8"))
+            self.assertFalse((self.state.agent_dir(1) / "home").exists())
 
-    def test_sync_agent_runtime_files_preserves_existing_home_files(self):
+    def test_sync_seeded_home_creates_managed_files_and_state(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
-            self.state.write_jsonfile(
-                self.state.agent_metadata_path(2),
-                {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "stop"},
+            home_dir = Path("home")
+            agent_data = {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "stop"}
+
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
+                agent_data,
             )
-            self.state.write_envfile(
-                self.state.ENVIRONMENT_FILE,
-                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
+
+            soul_path = home_dir / "SOUL.md"
+            home_env_path = home_dir / ".env"
+            state_path = self.home_seed.home_seed_state_path(home_dir)
+            desired_entries = self.home_seed.build_desired_seed_entries(agent_data)
+
+            self.assertTrue(changed)
+            self.assertEqual(
+                soul_path.read_text(encoding="utf-8"),
+                self.home_seed.render_seed_entry("SOUL.md", desired_entries["SOUL.md"]),
             )
-            home_dir = self.state.agent_home_dir(2)
-            self.state.ensure_private_directory(home_dir)
+            self.assertEqual(
+                home_env_path.read_text(encoding="utf-8"),
+                self.home_seed.render_seed_entry(".env", desired_entries[".env"]),
+            )
+            self.assertEqual(set(self.state.read_jsonfile(state_path)["files"]), {"SOUL.md", ".env"})
+
+    def test_sync_seeded_home_preserves_existing_home_files_without_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            home_dir = Path("home")
+            home_dir.mkdir()
             soul_path = home_dir / "SOUL.md"
             home_env_path = home_dir / ".env"
             soul_path.write_text("custom soul\n", encoding="utf-8")
             home_env_path.write_text("CUSTOM=true\n", encoding="utf-8")
 
-            self.sync.sync_agent_runtime_files(agent_id=2)
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
+                {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "stop"},
+            )
 
+            self.assertFalse(changed)
             self.assertEqual(soul_path.read_text(encoding="utf-8"), "custom soul\n")
             self.assertEqual(home_env_path.read_text(encoding="utf-8"), "CUSTOM=true\n")
 
-    def test_sync_agent_runtime_files_updates_seeded_home_files_after_agent_edit(self):
+    def test_sync_seeded_home_updates_managed_files_after_agent_edit(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
-            self.state.write_jsonfile(
-                self.state.agent_metadata_path(2),
+            home_dir = Path("home")
+
+            self.home_seed.sync_seeded_home(
+                home_dir,
                 {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "start"},
             )
-            self.state.write_envfile(
-                self.state.ENVIRONMENT_FILE,
-                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
-            )
 
-            self.sync.sync_agent_runtime_files(agent_id=2)
-
-            self.state.write_jsonfile(
-                self.state.agent_metadata_path(2),
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
                 {"id": 2, "name": "Bob Renamed", "role": "business_consultant", "status": "start"},
             )
 
-            self.sync.sync_agent_runtime_files(agent_id=2)
+            soul_path = home_dir / "SOUL.md"
+            home_env_path = home_dir / ".env"
 
-            soul_path = self.state.agent_home_dir(2) / "SOUL.md"
-            home_env_path = self.state.agent_home_dir(2) / ".env"
-
+            self.assertTrue(changed)
             self.assertIn(
                 "Your name is Bob Renamed, you are an Hermes Agent that runs on NethServer8",
                 soul_path.read_text(encoding="utf-8"),
@@ -346,59 +353,202 @@ class HermesModuleStateTest(unittest.TestCase):
                 home_env_path.read_text(encoding="utf-8"),
             )
 
-    def test_sync_agent_runtime_files_preserves_customized_seeded_home_files_after_agent_edit(self):
+    def test_sync_seeded_home_preserves_customized_files_after_agent_edit(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
-            self.state.write_jsonfile(
-                self.state.agent_metadata_path(2),
+            home_dir = Path("home")
+
+            self.home_seed.sync_seeded_home(
+                home_dir,
                 {"id": 2, "name": "Bob Agent", "role": "marketing", "status": "start"},
             )
-            self.state.write_envfile(
-                self.state.ENVIRONMENT_FILE,
-                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
-            )
 
-            self.sync.sync_agent_runtime_files(agent_id=2)
-
-            soul_path = self.state.agent_home_dir(2) / "SOUL.md"
-            home_env_path = self.state.agent_home_dir(2) / ".env"
+            soul_path = home_dir / "SOUL.md"
+            home_env_path = home_dir / ".env"
             soul_path.write_text("customized soul\n", encoding="utf-8")
             home_env_path.write_text("CUSTOM=true\n", encoding="utf-8")
 
-            self.state.write_jsonfile(
-                self.state.agent_metadata_path(2),
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
                 {"id": 2, "name": "Bob Renamed", "role": "business_consultant", "status": "start"},
             )
 
-            self.sync.sync_agent_runtime_files(agent_id=2)
-
+            self.assertFalse(changed)
             self.assertEqual(soul_path.read_text(encoding="utf-8"), "customized soul\n")
             self.assertEqual(home_env_path.read_text(encoding="utf-8"), "CUSTOM=true\n")
 
-    def test_sync_agent_runtime_files_replaces_symlinked_seed_file(self):
+    def test_sync_seeded_home_replaces_symlinked_seed_file(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
-            self.state.write_jsonfile(
-                self.state.agent_metadata_path(4),
+            home_dir = Path("home")
+            home_dir.mkdir()
+
+            self.home_seed.sync_seeded_home(
+                home_dir,
                 {"id": 4, "name": "Dana Agent", "role": "sales", "status": "start"},
             )
-            self.state.write_envfile(
-                self.state.ENVIRONMENT_FILE,
-                {"TIMEZONE": "UTC", "TCP_PORTS_RANGE": "20001-20030"},
-            )
-            home_dir = self.state.agent_home_dir(4)
-            self.state.ensure_private_directory(home_dir)
             soul_path = home_dir / "SOUL.md"
+            soul_path.unlink()
             target_path = home_dir / "outside.txt"
             target_path.write_text("do not overwrite\n", encoding="utf-8")
             os.symlink(target_path, soul_path)
 
-            self.sync.sync_agent_runtime_files(agent_id=4)
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
+                {"id": 4, "name": "Dana Agent", "role": "sales", "status": "start"},
+            )
 
+            self.assertTrue(changed)
             self.assertFalse(soul_path.is_symlink())
             self.assertIn(
                 "Your name is Dana Agent, you are an Hermes Agent that runs on NethServer8",
                 soul_path.read_text(encoding="utf-8"),
             )
             self.assertEqual(target_path.read_text(encoding="utf-8"), "do not overwrite\n")
+
+    def test_sync_seeded_home_uses_explicit_state_when_volume_state_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            home_dir = Path("home")
+            state_path = Path("agents") / "8" / self.state.HOME_VOLUME_STATE_FILE
+
+            self.home_seed.sync_seeded_home(
+                home_dir,
+                {"id": 8, "name": "Volume Agent", "role": "developer", "status": "start"},
+                state_path=state_path,
+            )
+
+            self.home_seed.home_seed_state_path(home_dir).unlink()
+
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
+                {"id": 8, "name": "Volume Renamed", "role": "researcher", "status": "start"},
+                state_path=state_path,
+            )
+
+            self.assertTrue(changed)
+            self.assertIn(
+                "Your name is Volume Renamed, you are an Hermes Agent that runs on NethServer8",
+                (home_dir / "SOUL.md").read_text(encoding="utf-8"),
+            )
+
+    def test_sync_seeded_home_replaces_symlinked_state_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            home_dir = Path("home")
+            home_dir.mkdir()
+            state_path = self.home_seed.home_seed_state_path(home_dir)
+            outside_state = Path("outside-state.json")
+            outside_state.write_text('{"files":{"SOUL.md":{"template_role":"sales"}}}\n', encoding="utf-8")
+            os.symlink(outside_state, state_path)
+
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
+                {"id": 5, "name": "Erin Agent", "role": "sales", "status": "start"},
+            )
+
+            self.assertTrue(changed)
+            self.assertFalse(state_path.is_symlink())
+            self.assertEqual(
+                self.state.read_jsonfile(state_path),
+                {"files": self.home_seed.build_desired_seed_entries({"id": 5, "name": "Erin Agent", "role": "sales", "status": "start"})},
+            )
+            self.assertEqual(
+                outside_state.read_text(encoding="utf-8"),
+                '{"files":{"SOUL.md":{"template_role":"sales"}}}\n',
+            )
+
+    def test_sync_seeded_home_recovers_from_invalid_state_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            home_dir = Path("home")
+            home_dir.mkdir()
+            state_path = self.home_seed.home_seed_state_path(home_dir)
+            state_path.write_text("not-json\n", encoding="utf-8")
+
+            changed = self.home_seed.sync_seeded_home(
+                home_dir,
+                {"id": 6, "name": "Frank Agent", "role": "developer", "status": "start"},
+            )
+
+            self.assertTrue(changed)
+            self.assertEqual(
+                self.state.read_jsonfile(state_path),
+                {"files": self.home_seed.build_desired_seed_entries({"id": 6, "name": "Frank Agent", "role": "developer", "status": "start"})},
+            )
+
+    def test_seed_agent_home_schedules_restart_only_when_files_change(self):
+        original_argv = sys.argv[:]
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+                home_dir = Path(temp_dir) / "volume"
+                home_dir.mkdir()
+                self.state.write_jsonfile(
+                    self.state.agent_metadata_path(7),
+                    {"id": 7, "name": "Restart Agent", "role": "developer", "status": "start"},
+                )
+
+                inspect_response = types.SimpleNamespace(returncode=0, stdout=f"{home_dir}\n")
+                ok_response = types.SimpleNamespace(returncode=0, stdout="")
+
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    [str(SEED_HOME_PATH), "--agent-id", "7"],
+                ), mock.patch("subprocess.run", side_effect=[inspect_response, ok_response]) as run_command, mock.patch(
+                    "sys.stdout",
+                    new_callable=io.StringIO,
+                ) as stdout:
+                    with self.assertRaises(SystemExit) as exit_error:
+                        runpy.run_path(str(SEED_HOME_PATH), run_name="__main__")
+
+                self.assertEqual(exit_error.exception.code, 0)
+
+                self.assertEqual(stdout.getvalue().strip(), "changed")
+                self.assertEqual(
+                    run_command.call_args_list,
+                    [
+                        mock.call(
+                            ["podman", "volume", "inspect", "--format", "{{.Mountpoint}}", "hermes-agent-7-home"],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        ),
+                        mock.call(
+                            [
+                                "systemd-run",
+                                "--user",
+                                "--collect",
+                                "--no-block",
+                                "--quiet",
+                                "/usr/bin/systemctl",
+                                "--user",
+                                "restart",
+                                "hermes-agent@7.service",
+                            ],
+                            check=True,
+                        ),
+                    ],
+                )
+
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    [str(SEED_HOME_PATH), "--agent-id", "7"],
+                ), mock.patch("subprocess.run", return_value=inspect_response) as run_command, mock.patch(
+                    "sys.stdout",
+                    new_callable=io.StringIO,
+                ) as stdout:
+                    with self.assertRaises(SystemExit) as exit_error:
+                        runpy.run_path(str(SEED_HOME_PATH), run_name="__main__")
+
+                self.assertEqual(exit_error.exception.code, 0)
+
+                self.assertEqual(stdout.getvalue().strip(), "unchanged")
+                run_command.assert_called_once_with(
+                    ["podman", "volume", "inspect", "--format", "{{.Mountpoint}}", "hermes-agent-7-home"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+        finally:
+            sys.argv[:] = original_argv
 
     def test_sync_agent_runtime_files_preserves_existing_agent_secret(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -545,6 +695,7 @@ class HermesModuleStateTest(unittest.TestCase):
                             check=False,
                         ),
                         mock.call(["podman", "rm", "--force", "hermes-agent-2"], check=False),
+                        mock.call(["podman", "volume", "rm", "--force", "hermes-agent-2-home"], check=False),
                         mock.call(["runagent", "discover-smarthost"], check=True),
                         mock.call(["runagent", "sync-agent-runtime"], check=True),
                         mock.call(["systemctl", "--user", "daemon-reload"], check=True),
@@ -678,6 +829,7 @@ class HermesModuleStateTest(unittest.TestCase):
                             check=False,
                         ),
                         mock.call(["podman", "rm", "--force", "hermes-agent-4"], check=False),
+                        mock.call(["podman", "volume", "rm", "--force", "hermes-agent-4-home"], check=False),
                     ],
                 )
                 self.assertFalse(self.state.agent_envfile(4).exists())

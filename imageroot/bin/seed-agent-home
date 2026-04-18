@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
+
+from hermes_agent_home_seed import sync_seeded_home
+from hermes_agent_state import agent_metadata_path, agent_seed_state_path, read_jsonfile, service_unit, volume_name
+
+
+def volume_mountpoint(agent_id):
+    result = subprocess.run(
+        ["podman", "volume", "inspect", "--format", "{{.Mountpoint}}", volume_name(agent_id)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    mountpoint = result.stdout.strip()
+    if not mountpoint:
+        raise ValueError(f"volume mountpoint not found for agent {agent_id}")
+    return Path(mountpoint)
+
+
+def schedule_restart(agent_id):
+    subprocess.run(
+        [
+            "systemd-run",
+            "--user",
+            "--collect",
+            "--no-block",
+            "--quiet",
+            "/usr/bin/systemctl",
+            "--user",
+            "restart",
+            service_unit(agent_id),
+        ],
+        check=True,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Seed managed Hermes home files into the agent volume")
+    parser.add_argument("--agent-id", type=int, required=True, help="Seed only one agent")
+    args = parser.parse_args()
+
+    try:
+        agent_data = read_jsonfile(agent_metadata_path(args.agent_id))
+        if agent_data is None:
+            raise ValueError(f"agent {args.agent_id} not found")
+
+        changed = sync_seeded_home(
+            volume_mountpoint(args.agent_id),
+            agent_data,
+            state_path=agent_seed_state_path(args.agent_id),
+        )
+        print("changed" if changed else "unchanged")
+        if changed:
+            schedule_restart(args.agent_id)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

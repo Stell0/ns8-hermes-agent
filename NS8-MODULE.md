@@ -86,13 +86,17 @@ Module-wide state:
 - `environment`
 - `secrets.env`
 
-Per-agent state:
+Per-agent state files:
 
 - `agents/<id>/metadata.json`
-- `agents/<id>/home/SOUL.md`
-- `agents/<id>/home/.env`
 - `agent_<id>.env`
 - `agent_<id>_secrets.env`
+
+Per-agent Podman volume:
+
+- `hermes-agent-<id>-home`, mounted at `/opt/data`
+- managed files inside the volume: `SOUL.md` and `.env`
+- internal seeding state file inside the volume: `.hermes-agent-seed-state.json`
 
 Shared SMTP values come from `discover-smarthost`:
 
@@ -111,23 +115,25 @@ For agent `1`, the runtime looks like:
 
 - systemd service: `hermes-agent@1.service`
 - Hermes container: `hermes-agent-1`
-- Hermes home bind mount: `%S/state/agents/1/home` mounted at `/opt/data`
+- Hermes home named volume: `hermes-agent-1-home` mounted at `/opt/data`
 - published dashboard port: `127.0.0.1:<allocated-port>` forwarded to container port `9119`
 
 Restart supervision is owned by `hermes-agent@<id>.service` with `Restart=on-failure`; the Podman container launches do not set container-level restart policies.
-The service passes the module user's UID and GID into the Hermes entrypoint and uses a keep-id user namespace so the bind-mounted home stays owned by the NS8 module user across container restarts.
+The service creates one Podman-managed volume per agent and mounts it with `--userns=keep-id`.
+Managed `SOUL.md` and the default Hermes home `.env` are seeded in `ExecStartPost` after the volume exists. If seeding changes managed files, the runtime requests one follow-up restart so Hermes starts again with the seeded content already present.
 The single Hermes container serves both `hermes gateway run` and the Hermes web dashboard.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/hermes-agent-N/` to the dashboard listener selected from the module-owned 30-port pool.
 
 ## Template seeding
 
-The module seeds two files into each agent home when they do not already exist:
+The runtime manages two files inside each agent volume:
 
 - `SOUL.md`, from `imageroot/templates/SOUL/<role>.md.in`
 - `.env`, from `imageroot/templates/home.env.in`
 
-Placeholder replacement is performed with `sed` inside `sync-agent-runtime`.
+Placeholder replacement is performed in Python by `seed-agent-home` through `hermes_agent_home_seed.py` after the volume mountpoint exists.
 If a seeded `SOUL.md` or `.env` still matches the previously generated content, it is refreshed when the agent name or role changes; customized files are preserved.
+The managed seed state is tracked under the agent state directory and mirrored into the volume as `.hermes-agent-seed-state.json` so later refreshes can recover if one copy is removed.
 
 ## Action flow
 
@@ -158,7 +164,7 @@ If a seeded `SOUL.md` or `.env` still matches the previously generated content, 
 - disables and stops every known `hermes-agent@<id>.service`
 - removes every managed Traefik route
 - removes every `hermes-agent-<id>` container if present
-- removes generated per-agent env files and state directories
+- removes generated per-agent env files, per-agent state directories, and per-agent Hermes home volumes
 
 ### `update-module`
 
@@ -172,7 +178,7 @@ The checked-in tests cover:
 
 - install with zero active agent services
 - configure with zero agents
-- create one started agent and verify service/container/files/route
-- stop the agent and verify inactive runtime
-- remove the agent and verify cleanup
+- create one started agent and verify service/container/volume/files/route
+- stop the agent and verify inactive runtime with retained generated files and volume
+- remove the agent and verify cleanup, including volume removal
 - remove the module and verify instance cleanup

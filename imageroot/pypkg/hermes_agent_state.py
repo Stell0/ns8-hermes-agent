@@ -49,6 +49,7 @@ TCP_PORTS_RANGE_ENV = "TCP_PORTS_RANGE"
 BASE_VIRTUALHOST_ENV = "BASE_VIRTUALHOST"
 AGENT_DASHBOARD_HOST_PORT_ENV = "AGENT_DASHBOARD_HOST_PORT"
 DASHBOARD_PORT = 9119
+HOME_VOLUME_STATE_FILE = ".hermes-agent-seed-state.json"
 BASE_VIRTUALHOST_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$"
 )
@@ -171,8 +172,8 @@ def agent_metadata_path(agent_id):
     return agent_dir(agent_id) / "metadata.json"
 
 
-def agent_home_dir(agent_id):
-    return agent_dir(agent_id) / "home"
+def agent_seed_state_path(agent_id):
+    return agent_dir(agent_id) / HOME_VOLUME_STATE_FILE
 
 
 def agent_envfile(agent_id):
@@ -189,6 +190,10 @@ def service_unit(agent_id):
 
 def container_name(agent_id):
     return f"hermes-agent-{agent_id}"
+
+
+def volume_name(agent_id):
+    return f"hermes-agent-{agent_id}-home"
 
 
 def route_instance_name(agent_id, module_id=None, shared_environment=None):
@@ -416,6 +421,8 @@ def remove_agent_state(agent_id):
     for path in (agent_envfile(agent_id), agent_secrets_envfile(agent_id)):
         if path.exists():
             path.unlink()
+
+    subprocess.run(["podman", "volume", "rm", "--force", volume_name(agent_id)], check=False)
 
     if agent_dir(agent_id).exists():
         shutil.rmtree(agent_dir(agent_id), ignore_errors=True)

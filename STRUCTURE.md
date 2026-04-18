@@ -27,12 +27,13 @@ This document maps the current layout.
 - `configure-module/validate-input.json`: input schema for the shared `base_virtualhost` plus the Hermes `agents` payload.
 - `get-configuration/20read`: returns the shared dashboard virtualhost plus configured agents with actual runtime status from systemd.
 - `get-configuration/validate-output.json`: output schema for the shared dashboard virtualhost plus the Hermes `agents` response.
-- `destroy-module/20destroy`: stops services, removes containers, deletes managed routes, and deletes generated per-agent files and directories.
+- `destroy-module/20destroy`: stops services, removes containers, deletes managed routes, and deletes generated per-agent files plus per-agent Hermes home volumes.
 
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets.env`.
-- `sync-agent-runtime`: writes `agent_<id>.env` and `agent_<id>_secrets.env`, and seeds each Hermes home from the checked-in role-specific SOUL templates plus the default home env template.
+- `sync-agent-runtime`: writes `agent_<id>.env` and `agent_<id>_secrets.env` for each configured agent.
+- `seed-agent-home`: seeds managed `SOUL.md` and home `.env` content into a per-agent Hermes volume after the container starts, preserving customized files, maintaining managed seed state under `agents/<id>/`, mirroring that state into the volume, and scheduling a restart only when managed content changed.
 
 ### `imageroot/events/`
 
@@ -40,7 +41,8 @@ This document maps the current layout.
 
 ### `imageroot/pypkg/`
 
-- `hermes_agent_state.py`: small shared helper for validation, env/json file handling, path naming, and service-state checks.
+- `hermes_agent_state.py`: small shared helper for validation, env/json file handling, path naming, named-volume naming, and service-state checks.
+- `hermes_agent_home_seed.py`: shared managed-home seeding logic for `SOUL.md` and the default Hermes home `.env`.
 
 ### `imageroot/update-module.d/`
 
@@ -52,14 +54,12 @@ This document maps the current layout.
 
 ### `imageroot/templates/`
 
-- `SOUL/`: checked-in role-specific templates used to seed `SOUL.md` with `sed`.
-- `home.env.in`: checked-in template used to seed the default Hermes home `.env` with `sed`.
+- `SOUL/`: checked-in role-specific templates used to seed managed `SOUL.md` content.
+- `home.env.in`: checked-in template used to seed the managed default Hermes home `.env`.
 
 ## `containers/`
 
 - `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.16`.
-- `containers/hermes/entrypoint.sh`: starts the Hermes gateway, Hermes dashboard, and local dashboard proxy inside the single runtime container.
-- `containers/hermes/hermes-dashboard-proxy.py`: rewrites path-prefixed Hermes dashboard traffic for Traefik routes.
 
 ## `ui/`
 
@@ -77,4 +77,4 @@ The embedded admin UI uses Vue 2 and Vue CLI.
 - `__init__.robot`: Robot Framework initialization file.
 - `kickstart.robot`: end-to-end module lifecycle checks.
 - `pythonreq.txt`: Python dependencies for the test runner.
-- `test_runtime_validation.py`: focused unit tests for state helpers, route wiring, runtime file seeding, and the single-container runtime contract.
+- `test_runtime_validation.py`: focused unit tests for state helpers, route wiring, named-volume lifecycle, managed home seeding, and the single-container runtime contract.

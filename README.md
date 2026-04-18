@@ -44,9 +44,9 @@ runagent -m hermes-agent1 podman exec -it hermes-agent-1 hermes
 The current implementation is intentionally small:
 
 - One dedicated Hermes container per configured agent.
-- One configured agent maps directly to one metadata file, one generated Hermes env file, one generated Hermes secrets env file, one Hermes home directory, one systemd user service, and one rootless Podman container.
+- One configured agent maps directly to one metadata file, one generated Hermes env file, one generated Hermes secrets env file, one Podman-managed Hermes home volume, one systemd user service, and one rootless Podman container.
 - A fresh install is idle until at least one agent is configured with `status: start`.
-- `SOUL.md` is seeded from a checked-in role-specific template, and the default Hermes home `.env` is seeded from its checked-in template with `sed` placeholder replacement; previously generated files are refreshed on agent name or role changes unless the operator customized them.
+- `SOUL.md` and the default Hermes home `.env` are seeded from checked-in templates into each agent volume after container start; previously managed files are refreshed on agent name or role changes unless the operator customized them.
 - The module reserves a fixed pool of 30 TCP ports and supports at most 30 agents.
 
 ## Current behavior
@@ -54,7 +54,7 @@ The current implementation is intentionally small:
 - `create-module` seeds minimal module state in `environment`, `secrets.env`, and `agents/`, records `TIMEZONE`, and discovers smarthost settings.
 - `configure-module` validates the submitted agent list and the shared dashboard virtualhost, stores one metadata file per agent, generates per-agent runtime files, reconciles Traefik dashboard routes, and enables or disables the corresponding `hermes-agent@<id>.service` instances.
 - `get-configuration` returns the shared `base_virtualhost`, the configured agents, keeps the persisted desired `status`, and reports actual runtime state separately as `runtime_status`.
-- `destroy-module` stops agent services, removes agent containers, deletes managed Traefik routes, and deletes generated per-agent files and directories.
+- `destroy-module` stops agent services, removes agent containers, deletes managed Traefik routes, and deletes generated per-agent files plus per-agent Hermes home volumes.
 - `update-module` backfills the module-owned 30-port TCP allocation on older instances that predate per-agent dashboard publishing.
 - `discover-smarthost` still merges shared SMTP settings into `environment` and `secrets.env`.
 
@@ -68,10 +68,13 @@ Module-wide files:
 Per-agent files:
 
 - `agents/<id>/metadata.json`
-- `agents/<id>/home/SOUL.md`
-- `agents/<id>/home/.env`
 - `agent_<id>.env`
 - `agent_<id>_secrets.env`
+
+Per-agent Podman volume:
+
+- `hermes-agent-<id>-home`, mounted at `/opt/data`
+- managed files inside the volume: `SOUL.md` and `.env`
 
 Operator-visible runtime names are `hermes-agent-<id>` for Hermes containers. The shipped systemd unit is the internal template `hermes-agent@.service`.
 
@@ -139,7 +142,7 @@ That configuration will:
 
 - store `agents/1/metadata.json`
 - generate `agent_1.env` and `agent_1_secrets.env`
-- seed `agents/1/home/SOUL.md` from the template for the agent role and `agents/1/home/.env` from the default home env template, then refresh those files on later name or role changes only when they still match the previous generated content
+- start `hermes-agent@1.service`, which creates the `hermes-agent-1-home` volume and seeds `/opt/data/SOUL.md` plus `/opt/data/.env` after container start, then refreshes those managed files on later name or role changes only when they still match the previous managed content
 - create or update the Traefik route `https://agents.example.org/hermes-agent-1/`
 - enable and start `hermes-agent@1.service`
 - run one rootless Podman container, `hermes-agent-1`, that serves the Hermes gateway and web dashboard
@@ -170,11 +173,12 @@ Each started agent runs:
 
 - one `systemctl --user` service instance: `hermes-agent@<id>.service`
 - one Hermes container: `hermes-agent-<id>`
-- one bind-mounted Hermes home directory at `/opt/data`
+- one Podman-managed Hermes home volume mounted at `/opt/data`
 - one published dashboard port from the module-owned 30-port pool, forwarded to the container's Hermes dashboard on port `9119`
 
 Restart supervision is owned by the systemd user unit with `Restart=on-failure`; the Podman container launches do not set container-level restart policies.
-The service passes the module user's UID and GID into the Hermes entrypoint and uses a keep-id user namespace so the bind-mounted home stays owned by the NS8 module user across container restarts.
+The service creates one named volume per agent and mounts it at `/opt/data` with a keep-id user namespace.
+Managed `SOUL.md` and home `.env` seeding now runs in `ExecStartPost` after the volume exists; if seeding changes managed files, the service requests one follow-up restart so Hermes starts again with the updated home content.
 The Hermes container reads `agent_<id>.env` and `agent_<id>_secrets.env`.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/hermes-agent-N/` to that container's Hermes web dashboard.
 
@@ -212,9 +216,9 @@ The checked-in tests cover the pruned contract:
 
 - install produces no active agent runtime
 - zero agents keeps the module idle
-- one started agent produces one service, one container, one route, and one isolated file set
-- stopping an agent disables the runtime without deleting its files
-- removing an agent cleans the runtime files
+- one started agent produces one service, one container, one route, one isolated volume, and one isolated generated file set
+- stopping an agent disables the runtime without deleting its generated files or volume
+- removing an agent cleans the runtime files and volume
 - removing the module cleans the instance state
 
 ## Uninstall

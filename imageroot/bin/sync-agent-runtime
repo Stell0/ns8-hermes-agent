@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -11,47 +9,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 from hermes_agent_state import (
     AGENT_SECRET_KEY,
     AGENT_DASHBOARD_HOST_PORT_ENV,
-    ALLOWED_ROLES,
     BASE_VIRTUALHOST_ENV,
     ENVIRONMENT_FILE,
-    HOME_ENV_TEMPLATE,
     SHARED_SECRETS_ENVFILE,
     SMTP_PUBLIC_KEYS,
     SMTP_SECRET_KEY,
     agent_envfile,
     agent_dashboard_host_port,
-    agent_home_dir,
     agent_secrets_envfile,
-    ensure_private_directory,
     generate_secret,
     read_agents_from_state,
     read_envfile,
-    soul_template_for_role,
     timezone_value,
     write_envfile,
-    write_private_textfile,
 )
-
-
-ROLE_TITLES = {role: role.replace("_", " ") for role in ALLOWED_ROLES}
-
-
-def escaped_sed_value(value):
-    return value.replace("\\", r"\\").replace("&", r"\&").replace("|", r"\|")
-
-
-def render_template_content(template_path, replacements):
-    command = ["sed"]
-    for placeholder, value in replacements.items():
-        command.extend(["-e", f"s|{placeholder}|{escaped_sed_value(value)}|g"])
-    command.append(str(template_path))
-
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
-    return result.stdout
-
-
-def render_template(template_path, target_path, replacements):
-    write_private_textfile(target_path, render_template_content(template_path, replacements))
 
 
 def agent_by_id(agent_id):
@@ -60,84 +31,6 @@ def agent_by_id(agent_id):
             return agent_data
 
     raise ValueError(f"agent {agent_id} not found")
-
-
-def build_template_replacements(agent_id, agent_name, agent_role):
-    return {
-        "__AGENT_ID__": str(agent_id),
-        "__AGENT_NAME__": agent_name,
-        "__AGENT_ROLE__": agent_role,
-    }
-
-
-def sync_seeded_file(
-    template_path,
-    target_path,
-    replacements,
-    previous_replacements=None,
-    previous_template_path=None,
-):
-    if target_path.is_symlink():
-        target_path.unlink()
-        render_template(template_path, target_path, replacements)
-        return
-
-    if not target_path.exists():
-        render_template(template_path, target_path, replacements)
-        return
-
-    if previous_replacements is None:
-        return
-
-    previous_template = previous_template_path or template_path
-
-    if target_path.read_text(encoding="utf-8") == render_template_content(previous_template, previous_replacements):
-        render_template(template_path, target_path, replacements)
-
-
-def seed_agent_home(agent_data, existing_agent_env):
-    home_dir = agent_home_dir(agent_data["id"])
-    ensure_private_directory(home_dir)
-    soul_template = soul_template_for_role(agent_data["role"])
-    soul_replacements = build_template_replacements(
-        agent_data["id"],
-        agent_data["name"],
-        ROLE_TITLES.get(agent_data["role"], agent_data["role"]),
-    )
-    home_env_replacements = build_template_replacements(
-        agent_data["id"],
-        agent_data["name"],
-        agent_data["role"],
-    )
-    previous_name = existing_agent_env.get("AGENT_NAME")
-    previous_role = existing_agent_env.get("AGENT_ROLE")
-    previous_soul_template = None
-    previous_soul_replacements = None
-    previous_home_env_replacements = None
-    if previous_name and previous_role in ALLOWED_ROLES:
-        previous_soul_template = soul_template_for_role(previous_role)
-        previous_soul_replacements = build_template_replacements(
-            agent_data["id"],
-            previous_name,
-            ROLE_TITLES.get(previous_role, previous_role),
-        )
-        previous_home_env_replacements = build_template_replacements(
-            agent_data["id"],
-            previous_name,
-            previous_role,
-        )
-
-    soul_path = home_dir / "SOUL.md"
-    sync_seeded_file(
-        soul_template,
-        soul_path,
-        soul_replacements,
-        previous_soul_replacements,
-        previous_template_path=previous_soul_template,
-    )
-
-    home_env_path = home_dir / ".env"
-    sync_seeded_file(HOME_ENV_TEMPLATE, home_env_path, home_env_replacements, previous_home_env_replacements)
 
 
 def build_agent_public_env(agent_data, shared_environment):
@@ -178,8 +71,6 @@ def sync_agent_runtime_files(agent_id=None):
     agent_data_list = [agent_by_id(agent_id)] if agent_id is not None else read_agents_from_state()
 
     for agent_data in agent_data_list:
-        existing_agent_env = read_envfile(agent_envfile(agent_data["id"]))
-        seed_agent_home(agent_data, existing_agent_env)
         write_envfile(agent_envfile(agent_data["id"]), build_agent_public_env(agent_data, shared_environment))
         existing_agent_secrets = read_envfile(agent_secrets_envfile(agent_data["id"]))
         agent_secrets = build_agent_secrets(existing_agent_secrets, shared_secrets)

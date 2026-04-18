@@ -4,6 +4,7 @@ Description=Hermes agent runtime %i
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 EnvironmentFile=-%S/state/environment
+EnvironmentFile=-%S/state/agent_%i.env
 WorkingDirectory=%S/state
 Restart=on-failure
 KillMode=none
@@ -12,29 +13,21 @@ NotifyAccess=all
 ExecStartPre=/usr/local/bin/runagent discover-smarthost
 ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id %i
 ExecStartPre=-/usr/bin/podman rm --force hermes-agent-%i
-ExecStart=/usr/bin/bash -lc '
-	set -euo pipefail
-	port=$(grep "^AGENT_DASHBOARD_HOST_PORT=" %S/state/agent_%i.env | cut -d= -f2-)
-	uid=$(id -u)
-	gid=$(id -g)
-	exec /usr/bin/podman run \
+ExecStart=runagent /usr/bin/podman run \
 		--name hermes-agent-%i \
 		--replace \
 		--rm \
 		--sdnotify=conmon \
 		--cgroups=no-conmon \
 		--userns=keep-id \
-		--user 0:0 \
-		--publish 127.0.0.1:${port}:9119 \
-		--env HERMES_UID=${uid} \
-		--env HERMES_GID=${gid} \
+		--publish 127.0.0.1:${AGENT_DASHBOARD_HOST_PORT}:9119 \
 		--env-file %S/state/agent_%i.env \
 		--env-file %S/state/agent_%i_secrets.env \
-		--volume %S/state/agents/%i/home:/opt/data:Z \
+		--volume hermes-agent-%i-home:/opt/data \
 		--tz=${TIMEZONE} \
 		--network=slirp4netns:allow_host_loopback=true \
 		${HERMES_AGENT_HERMES_IMAGE}
-'
+ExecStartPost=/usr/local/bin/runagent seed-agent-home --agent-id %i
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-%i
 ExecStopPost=-/usr/bin/podman rm --force hermes-agent-%i
 TimeoutStopSec=70
