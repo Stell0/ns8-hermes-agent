@@ -17,4 +17,5 @@ RUN pip install --no-cache-dir --break-system-packages \
 
 
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
-CMD ["hermes","gateway","run"]
+
+CMD ["gateway","run"]

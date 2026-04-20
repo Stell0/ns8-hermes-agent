@@ -19,11 +19,10 @@ ExecStart=runagent /usr/bin/podman run \
 		--rm \
 		--sdnotify=conmon \
 		--cgroups=no-conmon \
-		--userns=keep-id \
 		--publish 127.0.0.1:${AGENT_DASHBOARD_HOST_PORT}:9119 \
 		--env-file %S/state/agent_%i.env \
 		--env-file %S/state/agent_%i_secrets.env \
-		--volume hermes-agent-%i-home:/opt/data \
+		--volume hermes-agent-%i-home:/opt/data:Z \
 		--tz=${TIMEZONE} \
 		--network=slirp4netns:allow_host_loopback=true \
 		${HERMES_AGENT_HERMES_IMAGE}
