@@ -13,6 +13,11 @@ from hermes_agent_state import (
     BASE_VIRTUALHOST_PREVIOUS_ENV,
     LETS_ENCRYPT_PREVIOUS_ENV,
     container_name,
+    dashboard_container_name,
+    legacy_container_name,
+    legacy_service_unit,
+    pod_name,
+    pod_service_unit,
     read_agents_from_state,
     service_unit,
 )
@@ -24,7 +29,12 @@ def run(command, check=True):
 
 def stop_disable_agent(agent_id):
     run(["systemctl", "--user", "disable", "--now", service_unit(agent_id)], check=False)
+    run(["systemctl", "--user", "stop", pod_service_unit(agent_id)], check=False)
+    run(["systemctl", "--user", "disable", "--now", legacy_service_unit(agent_id)], check=False)
+    run(["podman", "pod", "rm", "--force", pod_name(agent_id)], check=False)
     run(["podman", "rm", "--force", container_name(agent_id)], check=False)
+    run(["podman", "rm", "--force", dashboard_container_name(agent_id)], check=False)
+    run(["podman", "rm", "--force", legacy_container_name(agent_id)], check=False)
 
 
 json.load(sys.stdin)
@@ -34,6 +44,7 @@ for agent_data in read_agents_from_state():
     if agent_data["status"] == "start":
         run(["systemctl", "--user", "enable", service_unit(agent_id)])
         run(["systemctl", "--user", "stop", service_unit(agent_id)], check=False)
+        run(["systemctl", "--user", "stop", pod_service_unit(agent_id)], check=False)
         run(["systemctl", "--user", "start", service_unit(agent_id)])
         continue
 

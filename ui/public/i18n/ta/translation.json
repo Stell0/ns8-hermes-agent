@@ -63,7 +63,7 @@
     "agent_name_invalid": "Use only letters and spaces",
     "base_virtualhost": "Agent dashboard virtualhost",
     "base_virtualhost_placeholder": "Example: agents.example.org",
-    "base_virtualhost_description": "When set, every agent gets a Traefik route at https://<host>/hermes-agent-N/ that forwards to its dedicated Hermes web dashboard.",
+    "base_virtualhost_description": "When set, every agent gets a Traefik route at https://<host>/hermes-N/ that forwards to its dedicated Hermes web dashboard.",
     "request_le_certificates": "Request a Let's Encrypt certificate",
     "request_le_certificates_tooltip": "Enable automatic TLS certificates for the shared dashboard virtualhost published through Traefik.",
     "request_le_certificates_disabled_warning_description": "Saving will remove the automatic Let's Encrypt certificate from the shared dashboard virtualhost until you enable it again.",

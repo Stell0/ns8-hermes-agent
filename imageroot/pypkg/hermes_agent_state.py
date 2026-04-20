@@ -157,10 +157,34 @@ def agent_secrets_envfile(agent_id):
 
 
 def service_unit(agent_id):
+    return f"hermes@{agent_id}.service"
+
+
+def dashboard_service_unit(agent_id):
+    return f"hermes-dashboard@{agent_id}.service"
+
+
+def pod_service_unit(agent_id):
+    return f"hermes-pod@{agent_id}.service"
+
+
+def legacy_service_unit(agent_id):
     return f"hermes-agent@{agent_id}.service"
 
 
 def container_name(agent_id):
+    return f"hermes-{agent_id}"
+
+
+def dashboard_container_name(agent_id):
+    return f"hermes-dashboard-{agent_id}"
+
+
+def pod_name(agent_id):
+    return f"hermes-pod-{agent_id}"
+
+
+def legacy_container_name(agent_id):
     return f"hermes-agent-{agent_id}"
 
 
@@ -180,7 +204,7 @@ def route_instance_name(agent_id, module_id=None, shared_environment=None):
 
 
 def route_path(agent_id):
-    return f"/hermes-agent-{agent_id}"
+    return f"/hermes-{agent_id}"
 
 
 def parse_tcp_ports_range(port_range):

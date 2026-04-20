@@ -8,7 +8,7 @@ for agent_dir in agents/*; do
 	[[ -d "$agent_dir" ]] || continue
 
 	agent_id="${agent_dir##*/}"
-	if systemctl --user is-active --quiet "hermes-agent@${agent_id}.service"; then
-		systemctl --user restart "hermes-agent@${agent_id}.service"
+	if systemctl --user is-active --quiet "hermes@${agent_id}.service"; then
+		systemctl --user restart "hermes@${agent_id}.service"
 	fi
 done

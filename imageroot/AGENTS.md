@@ -2,8 +2,8 @@
 
 - This subtree is the installed NS8 module payload. Keep it aligned to the checked-in per-agent Hermes dashboard implementation.
 - There is no OpenViking runtime, no hidden backend runtime, no shared target, and no `AGENTS_LIST` registry anymore.
-- The runtime contract is now: one configured agent equals one metadata file, one generated Hermes env file, one generated Hermes secrets env file, one Podman-managed Hermes home volume, one `hermes-agent@<id>.service`, and one rootless `hermes-agent-<id>` container that serves both gateway traffic and the Hermes web dashboard.
-- Keep restart ownership in systemd: `hermes-agent@<id>.service` handles restart policy, and the Podman container launch should not add container-level `--restart` policies.
+- The runtime contract is now: one configured agent equals one metadata file, one generated Hermes env file, one generated Hermes secrets env file, one Podman-managed Hermes home volume, one `hermes@<id>.service`, one `hermes-dashboard@<id>.service`, one `hermes-pod-<id>` pod, one rootless `hermes-<id>` gateway container, and one rootless `hermes-dashboard-<id>` dashboard container.
+- Keep restart ownership in systemd: `hermes@<id>.service` and `hermes-dashboard@<id>.service` handle restart policy, and the Podman pod/container launches should not add container-level `--restart` policies.
 - Preserve named-volume ownership semantics: keep `--userns=keep-id`, keep one Hermes home volume per agent, and do not regress the runtime into shared or root-owned agent homes across restarts.
 - Preserve the NS8 action model already used here: numbered executable action steps, JSON stdin for actions, JSON stdout for reads, and schema files beside the actions.
 - `environment` is shared NS8 state. Merge only managed keys and preserve core-managed values such as `HERMES_AGENT_HERMES_IMAGE`.

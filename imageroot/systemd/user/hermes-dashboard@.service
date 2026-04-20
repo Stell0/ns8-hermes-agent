@@ -1,0 +1,34 @@
+[Unit]
+Description=Hermes dashboard %i
+Requires=hermes-pod@%i.service hermes@%i.service
+After=hermes-pod@%i.service hermes@%i.service
+PartOf=hermes@%i.service
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=-%S/state/environment
+EnvironmentFile=-%S/state/agent_%i.env
+WorkingDirectory=%S/state
+Restart=on-failure
+KillMode=none
+Type=notify
+NotifyAccess=all
+ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id %i
+ExecStartPre=-/usr/bin/podman rm --force hermes-dashboard-%i
+ExecStart=runagent /usr/bin/podman run \
+		--name hermes-dashboard-%i \
+		--replace \
+		--rm \
+		--sdnotify=conmon \
+		--cgroups=no-conmon \
+		--pod hermes-pod-%i \
+		--userns=keep-id \
+		--env-file %S/state/agent_%i.env \
+		--env GATEWAY_HEALTH_URL=http://127.0.0.1:8642 \
+		--volume hermes-agent-%i-home:/opt/data:Z,ro \
+		--tz=${TIMEZONE} \
+		${HERMES_AGENT_HERMES_IMAGE} \
+		dashboard --host 0.0.0.0
+ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-dashboard-%i
+ExecStopPost=-/usr/bin/podman rm --force hermes-dashboard-%i
+TimeoutStopSec=70

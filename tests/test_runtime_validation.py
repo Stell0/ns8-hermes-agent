@@ -18,8 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
 REMOVE_AGENT_STATE_PATH = ROOT / "imageroot" / "bin" / "remove-agent-state"
-SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-agent@.service"
+SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes@.service"
+DASHBOARD_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-dashboard@.service"
+POD_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-pod@.service"
 HERMES_CONTAINERFILE_PATH = ROOT / "containers" / "hermes" / "Containerfile"
+HERMES_ENTRYPOINT_PATH = ROOT / "containers" / "hermes" / "entrypoint.sh"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
@@ -30,6 +33,7 @@ DESTROY_REMOVE_ROUTES_PATH = DESTROY_MODULE_ACTION_DIR / "10remove-routes"
 GET_CONFIGURATION_PATH = ROOT / "imageroot" / "actions" / "get-configuration" / "20read"
 GET_AGENT_RUNTIME_PATH = ROOT / "imageroot" / "actions" / "get-agent-runtime" / "10read"
 UPDATE_TCP_PORTS_PATH = ROOT / "imageroot" / "update-module.d" / "10ensure_tcp_ports"
+SMARTHOST_CHANGED_EVENT_PATH = ROOT / "imageroot" / "events" / "smarthost-changed" / "10reload_services"
 
 
 def load_module(path, module_name):
@@ -52,12 +56,20 @@ def working_directory(path):
         yield
     finally:
         os.chdir(current_directory)
+
+
 def write_envfile(path, env_data):
     file_path = Path(path)
     content = "\n".join(f"{key}={value}" for key, value in env_data.items())
     if content:
         content = f"{content}\n"
     file_path.write_text(content, encoding="utf-8")
+
+
+def write_executable(path, content):
+    file_path = Path(path)
+    file_path.write_text(content, encoding="utf-8")
+    file_path.chmod(0o755)
 
 
 def read_envfile(path):
@@ -346,28 +358,108 @@ class HermesModuleStateTest(unittest.TestCase):
             else:
                 del sys.modules["agent"]
 
-    def test_service_template_does_not_load_removed_hosts_envfile(self):
+    def test_runtime_name_helpers_preserve_split_contract(self):
+        self.assertEqual(self.state.service_unit(1), "hermes@1.service")
+        self.assertEqual(self.state.dashboard_service_unit(1), "hermes-dashboard@1.service")
+        self.assertEqual(self.state.pod_service_unit(1), "hermes-pod@1.service")
+        self.assertEqual(self.state.legacy_service_unit(1), "hermes-agent@1.service")
+        self.assertEqual(self.state.container_name(1), "hermes-1")
+        self.assertEqual(self.state.dashboard_container_name(1), "hermes-dashboard-1")
+        self.assertEqual(self.state.pod_name(1), "hermes-pod-1")
+        self.assertEqual(self.state.legacy_container_name(1), "hermes-agent-1")
+        self.assertEqual(self.state.volume_name(1), "hermes-agent-1-home")
+        self.assertEqual(
+            self.state.route_instance_name(1, module_id="hermes-agent1"),
+            "hermes-agent1-hermes-agent-1",
+        )
+        self.assertEqual(self.state.route_path(1), "/hermes-1")
+
+    def test_service_templates_keep_runtime_contract(self):
         service_template = SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
+        dashboard_template = DASHBOARD_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
+        pod_template = POD_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
 
         self.assertIn("Restart=on-failure", service_template)
         self.assertNotIn("Restart=always", service_template)
         self.assertNotIn("EnvironmentFile=-%S/state/hosts", service_template)
         self.assertNotIn("$PODMAN_ADD_HOST_ARGS", service_template)
         self.assertNotIn("--restart=always", service_template)
-        self.assertNotIn("--pod ", service_template)
-        self.assertIn("AGENT_DASHBOARD_HOST_PORT", service_template)
-        self.assertIn("--name hermes-agent-%i", service_template)
+        self.assertIn("--pod hermes-pod-%i", service_template)
+        self.assertIn("--name hermes-%i", service_template)
         self.assertIn("--userns=keep-id", service_template)
         self.assertIn("--volume hermes-agent-%i-home:/opt/data", service_template)
         self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agent_%i.env", service_template)
         self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
+        self.assertIn("API_SERVER_ENABLED=true", service_template)
+        self.assertIn("gateway run", service_template)
         self.assertNotIn("seed-agent-home", service_template)
+
+        self.assertIn("--name hermes-dashboard-%i", dashboard_template)
+        self.assertIn("--pod hermes-pod-%i", dashboard_template)
+        self.assertIn("--userns=keep-id", dashboard_template)
+        self.assertIn("GATEWAY_HEALTH_URL=http://127.0.0.1:8642", dashboard_template)
+        self.assertIn("--volume hermes-agent-%i-home:/opt/data:Z,ro", dashboard_template)
+        self.assertIn("dashboard --host 0.0.0.0", dashboard_template)
+        self.assertNotIn("--publish ", dashboard_template)
+
+        self.assertIn("Type=oneshot", pod_template)
+        self.assertIn("RemainAfterExit=yes", pod_template)
+        self.assertIn("AGENT_DASHBOARD_HOST_PORT", pod_template)
+        self.assertIn("--name hermes-pod-%i", pod_template)
+        self.assertIn("--publish 127.0.0.1:${AGENT_DASHBOARD_HOST_PORT}:9119", pod_template)
 
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
         self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.4.16", containerfile)
+
+    def test_hermes_entrypoint_keeps_absolute_virtualenv_activation(self):
+        entrypoint = HERMES_ENTRYPOINT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('source "${INSTALL_DIR}/.venv/bin/activate"', entrypoint)
+        self.assertNotIn("source .venv/bin/activate", entrypoint)
+
+    def test_smarthost_changed_event_restarts_active_primary_units(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            Path("agents/1").mkdir(parents=True)
+            Path("agents/2").mkdir(parents=True)
+
+            bin_dir = Path(temp_dir) / "bin"
+            bin_dir.mkdir()
+            command_log_path = Path(temp_dir) / "commands.log"
+
+            write_executable(
+                bin_dir / "runagent",
+                "#!/bin/sh\nprintf 'runagent %s\\n' \"$*\" >> \"$TEST_LOG\"\nexit 0\n",
+            )
+            write_executable(
+                bin_dir / "systemctl",
+                "#!/bin/sh\nprintf 'systemctl %s\\n' \"$*\" >> \"$TEST_LOG\"\ncase \"$*\" in\n  \"--user is-active --quiet hermes@1.service\")\n    exit 0\n    ;;\n  \"--user is-active --quiet hermes@2.service\")\n    exit 3\n    ;;\n  \"--user restart hermes@1.service\")\n    exit 0\n    ;;\nesac\nexit 1\n",
+            )
+
+            subprocess.run(
+                [str(SMARTHOST_CHANGED_EVENT_PATH)],
+                check=True,
+                env={
+                    **os.environ,
+                    "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                    "TEST_LOG": str(command_log_path),
+                },
+            )
+
+            logged_commands = command_log_path.read_text(encoding="utf-8").splitlines()
+
+            self.assertEqual(
+                logged_commands,
+                [
+                    "runagent discover-smarthost",
+                    "systemctl --user is-active --quiet hermes@1.service",
+                    "systemctl --user restart hermes@1.service",
+                    "systemctl --user is-active --quiet hermes@2.service",
+                ],
+            )
+            self.assertNotIn("hermes-agent@", command_log_path.read_text(encoding="utf-8"))
 
     def test_write_private_textfile_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -747,13 +839,13 @@ class HermesModuleStateTest(unittest.TestCase):
                                 "instance": "hermes-agent1-hermes-agent-1",
                                 "url": "http://127.0.0.1:20001",
                                 "host": "new.example.org",
-                                "path": "/hermes-agent-1",
+                                "path": "/hermes-1",
                                 "http2https": True,
                                 "lets_encrypt": True,
                                 "strip_prefix": True,
                                 "headers": {
                                     "request": {
-                                        "X-Forwarded-Prefix": "/hermes-agent-1",
+                                        "X-Forwarded-Prefix": "/hermes-1",
                                     }
                                 },
                             },
@@ -826,14 +918,14 @@ class HermesModuleStateTest(unittest.TestCase):
                         "instance": "hermes-agent1-hermes-agent-1",
                         "url": "http://127.0.0.1:20001",
                         "host": "agents.example.org",
-                        "path": "/hermes-agent-1",
+                        "path": "/hermes-1",
                         "http2https": True,
                         "lets_encrypt": False,
                         "lets_encrypt_cleanup": True,
                         "strip_prefix": True,
                         "headers": {
                             "request": {
-                                "X-Forwarded-Prefix": "/hermes-agent-1",
+                                "X-Forwarded-Prefix": "/hermes-1",
                             }
                         },
                     },
@@ -1068,9 +1160,14 @@ class HermesModuleStateTest(unittest.TestCase):
                 agent_stub.set_env.assert_not_called()
                 command_list = [call.args[0] for call in run_command.call_args_list]
                 self.assertEqual(
-                    command_list[:5],
+                    command_list[:10],
                     [
+                        ["systemctl", "--user", "disable", "--now", "hermes@2.service"],
+                        ["systemctl", "--user", "stop", "hermes-pod@2.service"],
                         ["systemctl", "--user", "disable", "--now", "hermes-agent@2.service"],
+                        ["podman", "pod", "rm", "--force", "hermes-pod-2"],
+                        ["podman", "rm", "--force", "hermes-2"],
+                        ["podman", "rm", "--force", "hermes-dashboard-2"],
                         ["podman", "rm", "--force", "hermes-agent-2"],
                         ["runagent", "remove-agent-state", "--agent-id", "2"],
                         ["podman", "volume", "exists", "hermes-agent-2-home"],
@@ -1080,14 +1177,9 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.assertIn(["runagent", "discover-smarthost"], command_list)
                 self.assertIn(["runagent", "sync-agent-runtime"], command_list)
                 self.assertIn(["systemctl", "--user", "daemon-reload"], command_list)
-                self.assertEqual(
-                    command_list[-3:],
-                    [
-                        ["systemctl", "--user", "enable", "hermes-agent@1.service"],
-                        ["systemctl", "--user", "stop", "hermes-agent@1.service"],
-                        ["systemctl", "--user", "start", "hermes-agent@1.service"],
-                    ],
-                )
+                self.assertEqual(command_list[-2:], [["systemctl", "--user", "stop", "hermes-pod@1.service"], ["systemctl", "--user", "start", "hermes@1.service"]])
+                self.assertIn(["systemctl", "--user", "enable", "hermes@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "stop", "hermes@1.service"], command_list)
                 seed_commands = [command for command in command_list if command[:2] == ["podman", "run"]]
                 self.assertEqual(len(seed_commands), 1)
                 self.assertIn("hermes-agent-seed-1", seed_commands[0])
@@ -1172,13 +1264,13 @@ class HermesModuleStateTest(unittest.TestCase):
                         "instance": "hermes-agent1-hermes-agent-1",
                         "url": "http://127.0.0.1:20001",
                         "host": "agents.example.org",
-                        "path": "/hermes-agent-1",
+                        "path": "/hermes-1",
                         "http2https": True,
                         "lets_encrypt": True,
                         "strip_prefix": True,
                         "headers": {
                             "request": {
-                                "X-Forwarded-Prefix": "/hermes-agent-1",
+                                "X-Forwarded-Prefix": "/hermes-1",
                             }
                         },
                     },
@@ -1387,9 +1479,20 @@ class HermesModuleStateTest(unittest.TestCase):
                     run_command.call_args_list,
                     [
                         mock.call(
+                            ["systemctl", "--user", "disable", "--now", "hermes@4.service"],
+                            check=False,
+                        ),
+                        mock.call(
+                            ["systemctl", "--user", "stop", "hermes-pod@4.service"],
+                            check=False,
+                        ),
+                        mock.call(
                             ["systemctl", "--user", "disable", "--now", "hermes-agent@4.service"],
                             check=False,
                         ),
+                        mock.call(["podman", "pod", "rm", "--force", "hermes-pod-4"], check=False),
+                        mock.call(["podman", "rm", "--force", "hermes-4"], check=False),
+                        mock.call(["podman", "rm", "--force", "hermes-dashboard-4"], check=False),
                         mock.call(["podman", "rm", "--force", "hermes-agent-4"], check=False),
                         mock.call(["runagent", "remove-agent-state", "--agent-id", "4"], check=True),
                         mock.call(["podman", "volume", "exists", "hermes-agent-4-home"], check=False),

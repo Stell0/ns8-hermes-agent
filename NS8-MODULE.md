@@ -4,13 +4,13 @@ This document summarizes the current checked-in NS8 behavior for `ns8-hermes-age
 
 ## Overview
 
-`ns8-hermes-agent` is now a simple per-agent Hermes NS8 module with one Hermes container for each configured agent.
+`ns8-hermes-agent` is now a simple per-agent Hermes NS8 module with one Podman pod for each configured agent.
 
 - No OpenViking runtime
 - No hidden system agent
 - No shared backend API service
-- No companion frontend container
-- One configured agent equals one runtime service and one container
+- No shared frontend runtime outside the per-agent Hermes dashboard sidecar
+- One configured agent equals one primary service, one dashboard sidecar service, one pod, and two containers
 
 The implementation keeps the module lifecycle explicit:
 
@@ -95,7 +95,7 @@ Rules:
 }
 ```
 
-`runtime_status` is derived from `systemctl --user is-active hermes-agent@<id>.service`.
+`runtime_status` is derived from `systemctl --user is-active hermes@<id>.service`.
 
 ## State files
 
@@ -113,7 +113,9 @@ Per-agent state files:
 Per-agent Podman volume:
 
 - `hermes-agent-<id>-home`, mounted at `/opt/data`
-- managed files inside the volume: `SOUL.md` and `.env`
+- bootstrap-managed content inside the volume includes the seeded `SOUL.md`, `.env`, and `config.yaml`, plus the runtime directory skeleton used by Hermes
+
+Managed Traefik route instance names remain `<module_id>-hermes-agent-<id>`, and Hermes home volume names remain `hermes-agent-<id>-home` for compatibility across the runtime refactor.
 
 Shared SMTP values come from `discover-smarthost`:
 
@@ -124,22 +126,27 @@ Shared SMTP values come from `discover-smarthost`:
 
 ## Service model
 
-The shipped unit is:
+The shipped units are:
 
-- `imageroot/systemd/user/hermes-agent@.service`
+- `imageroot/systemd/user/hermes@.service`
+- `imageroot/systemd/user/hermes-dashboard@.service`
+- `imageroot/systemd/user/hermes-pod@.service`
 
 For agent `1`, the runtime looks like:
 
-- systemd service: `hermes-agent@1.service`
-- Hermes container: `hermes-agent-1`
+- primary systemd service: `hermes@1.service`
+- companion dashboard service: `hermes-dashboard@1.service`
+- Podman pod: `hermes-pod-1`
+- Hermes gateway container: `hermes-1`
+- Hermes dashboard container: `hermes-dashboard-1`
 - Hermes home named volume: `hermes-agent-1-home` mounted at `/opt/data`
-- published dashboard port: `127.0.0.1:<allocated-port>` forwarded to container port `9119`
+- published dashboard port: `127.0.0.1:<allocated-port>` forwarded from the pod to container port `9119`
 
-Restart supervision is owned by `hermes-agent@<id>.service` with `Restart=on-failure`; the Podman container launches do not set container-level restart policies.
+Restart supervision is owned by `hermes@<id>.service` and `hermes-dashboard@<id>.service` with `Restart=on-failure`; the Podman pod and container launches do not set container-level restart policies.
 The service creates one Podman-managed volume per agent and mounts it with `--userns=keep-id`.
-Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes-agent@<id>.service` starts. Later configure runs preserve existing files inside the volume.
-The single Hermes container serves both `hermes gateway run` and the Hermes web dashboard.
-If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/hermes-agent-N/` to the dashboard listener selected from the module-owned 30-port pool.
+Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes@<id>.service` starts. Later configure runs preserve existing files inside the volume.
+The gateway container runs `hermes gateway run`, while the sidecar dashboard container runs `hermes dashboard --host 0.0.0.0` against the shared pod network namespace.
+If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/hermes-N/` to the dashboard listener selected from the module-owned 30-port pool.
 
 ## Template seeding
 
@@ -167,14 +174,14 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 - `10validate-input`: validates the submitted agent list, optional shared virtualhost, and optional shared `lets_encrypt`
 - `20persist-shared-env`: persists `base_virtualhost` plus `lets_encrypt`, tracks previous values for route cleanup, and backfills `TIMEZONE` when missing
 - `30remove-deleted-routes`: deletes managed Traefik routes for removed agents when routing is active, including one-time certificate cleanup when all routes are removed
-- `40remove-deleted-agents`: stops removed services, removes removed containers, and delegates generated-state cleanup to `remove-agent-state`
+- `40remove-deleted-agents`: stops removed services, removes removed pods and containers, cleans legacy single-container leftovers, and delegates generated-state cleanup to `remove-agent-state`
 - `50write-agent-metadata`: writes one `metadata.json` file per desired agent
 - `60refresh-shared-settings`: runs `discover-smarthost`
 - `70sync-agent-runtime`: runs `sync-agent-runtime`
 - `75seed-agent-home`: runs a one-shot Hermes container to seed first-time `/opt/data/SOUL.md` and `/opt/data/.env` content from checked-in templates
 - `80reload-systemd`: reloads the user systemd manager
 - `90reconcile-desired-routes`: creates, updates, or clears one Traefik route per desired agent when `base_virtualhost` is configured or explicitly changed, including `lets_encrypt` cleanup for host changes or shared TLS disable events
-- `95reconcile-agent-services`: enables and starts `hermes-agent@<id>.service` for desired `start` agents and disables or stops the rest
+- `95reconcile-agent-services`: enables and starts `hermes@<id>.service` for desired `start` agents and disables or stops the rest
 
 ### `get-configuration`
 
@@ -182,12 +189,12 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 
 ### `get-agent-runtime`
 
-- `10read`: inspects `systemctl --user is-active hermes-agent@<id>.service` for each configured agent and returns live `runtime_status`
+- `10read`: inspects `systemctl --user is-active hermes@<id>.service` for each configured agent and returns live `runtime_status`
 
 ### `destroy-module`
 
 - `10remove-routes`: removes every managed Traefik route, including one-time certificate cleanup when shared `lets_encrypt` is enabled
-- `20stop-services`: disables and stops every known `hermes-agent@<id>.service` and removes every `hermes-agent-<id>` container if present
+- `20stop-services`: disables and stops every known `hermes@<id>.service`, stops each per-agent pod, removes the gateway and dashboard containers if present, and disables any legacy `hermes-agent@<id>.service` leftovers
 - `30remove-agent-state`: delegates generated-state cleanup for each known agent to `remove-agent-state`
 - `40remove-agents-root`: removes the top-level `agents/` directory
 

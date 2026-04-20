@@ -732,7 +732,7 @@ export default {
         return "";
       }
 
-      return `https://${normalizedBaseVirtualhost}/hermes-agent-${agentData.id}/`;
+      return `https://${normalizedBaseVirtualhost}/hermes-${agentData.id}/`;
     },
     roleLabel(role) {
       return this.$t(`settings.role_${role}`);

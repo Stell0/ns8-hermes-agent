@@ -27,7 +27,7 @@ This document maps the current layout.
 - `configure-module/10validate-input`: validates the submitted `base_virtualhost`, optional shared `lets_encrypt`, and agent list.
 - `configure-module/20persist-shared-env`: persists the shared virtualhost plus `lets_encrypt`, tracks previous values for route cleanup, and backfills `TIMEZONE`.
 - `configure-module/30remove-deleted-routes`: removes managed Traefik routes for removed agents when routing is active, including one-time certificate cleanup when the last managed route disappears.
-- `configure-module/40remove-deleted-agents`: stops removed services, removes removed containers, and delegates generated-state cleanup.
+- `configure-module/40remove-deleted-agents`: stops removed services, removes removed pods and containers, cleans legacy single-container leftovers, and delegates generated-state cleanup.
 - `configure-module/50write-agent-metadata`: stores one metadata file per desired agent.
 - `configure-module/60refresh-shared-settings`: refreshes shared SMTP settings via `discover-smarthost`.
 - `configure-module/70sync-agent-runtime`: regenerates `agent_<id>.env` and `agent_<id>_secrets.env`.
@@ -41,7 +41,7 @@ This document maps the current layout.
 - `get-agent-runtime/10read`: returns live per-agent runtime status derived from systemd.
 - `get-agent-runtime/validate-output.json`: output schema for the live runtime status response.
 - `destroy-module/10remove-routes`: removes managed Traefik routes for all known agents, including shared certificate cleanup when `lets_encrypt` is enabled.
-- `destroy-module/20stop-services`: stops known services and removes known containers.
+- `destroy-module/20stop-services`: stops known services and removes known pods and containers, including legacy single-container leftovers.
 - `destroy-module/30remove-agent-state`: delegates generated file, directory, and volume cleanup for each known agent.
 - `destroy-module/40remove-agents-root`: removes the top-level `agents/` directory.
 
@@ -65,7 +65,9 @@ This document maps the current layout.
 
 ### `imageroot/systemd/user/`
 
-- `hermes-agent@.service`: one runtime service per configured agent.
+- `hermes@.service`: primary gateway service per configured agent.
+- `hermes-dashboard@.service`: dashboard sidecar service per configured agent.
+- `hermes-pod@.service`: per-agent pod owner unit that publishes the dashboard port.
 
 ### `imageroot/templates/`
 
@@ -75,6 +77,7 @@ This document maps the current layout.
 ## `containers/`
 
 - `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.16`.
+- `containers/hermes/entrypoint.sh`: wrapper entrypoint that bootstraps the Hermes home volume before delegating to the upstream CLI.
 
 ## `ui/`
 
@@ -92,5 +95,4 @@ The embedded admin UI uses Vue 2 and Vue CLI.
 - `__init__.robot`: Robot Framework initialization file.
 - `kickstart.robot`: end-to-end module lifecycle checks.
 - `pythonreq.txt`: Python dependencies for the test runner.
-- `test_dashboard_proxy.py`: focused tests for dashboard path and proxy wiring.
-- `test_runtime_validation.py`: focused unit tests for state helpers, configure-time seeding, route wiring, named-volume lifecycle, and the single-container runtime contract.
+- `test_runtime_validation.py`: focused unit tests for state helpers, configure-time seeding, route wiring, named-volume lifecycle, and the per-agent pod runtime contract.

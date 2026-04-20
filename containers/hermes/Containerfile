@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir --break-system-packages \
     pytesseract \
     pdf2image
 
-
+COPY entrypoint.sh /entrypoint.sh
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
 
-CMD ["gateway","run"]
+ENTRYPOINT [ "/entrypoint.sh" ]

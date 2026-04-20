@@ -7,7 +7,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
-from hermes_agent_state import container_name, list_known_agent_ids, service_unit
+from hermes_agent_state import (
+    container_name,
+    dashboard_container_name,
+    legacy_container_name,
+    legacy_service_unit,
+    list_known_agent_ids,
+    pod_name,
+    pod_service_unit,
+    service_unit,
+)
 
 
 def run(command, check=True):
@@ -18,4 +27,9 @@ json.load(sys.stdin)
 
 for agent_id in list_known_agent_ids():
     run(["systemctl", "--user", "disable", "--now", service_unit(agent_id)], check=False)
+    run(["systemctl", "--user", "stop", pod_service_unit(agent_id)], check=False)
+    run(["systemctl", "--user", "disable", "--now", legacy_service_unit(agent_id)], check=False)
+    run(["podman", "pod", "rm", "--force", pod_name(agent_id)], check=False)
     run(["podman", "rm", "--force", container_name(agent_id)], check=False)
+    run(["podman", "rm", "--force", dashboard_container_name(agent_id)], check=False)
+    run(["podman", "rm", "--force", legacy_container_name(agent_id)], check=False)

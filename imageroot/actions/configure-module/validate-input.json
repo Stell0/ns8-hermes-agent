@@ -11,7 +11,7 @@
     ],
     "properties": {
         "base_virtualhost": {
-            "description": "Base virtualhost for agent dashboards. When set, every agent gets a Traefik route at https://<host>/hermes-agent-N/ that forwards to its dedicated Hermes web dashboard. Must be a valid fully qualified domain name or left empty to disable shared dashboard hosting.",
+            "description": "Base virtualhost for agent dashboards. When set, every agent gets a Traefik route at https://<host>/hermes-N/ that forwards to its dedicated Hermes web dashboard. Must be a valid fully qualified domain name or left empty to disable shared dashboard hosting.",
             "anyOf": [
                 {
                     "type": "string",

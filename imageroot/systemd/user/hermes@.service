@@ -1,5 +1,9 @@
 [Unit]
-Description=Hermes agent runtime %i
+Description=Hermes gateway %i
+Requires=hermes-pod@%i.service
+After=hermes-pod@%i.service
+Wants=hermes-dashboard@%i.service
+Before=hermes-dashboard@%i.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
@@ -12,22 +16,25 @@ Type=notify
 NotifyAccess=all
 ExecStartPre=/usr/local/bin/runagent discover-smarthost
 ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id %i
-ExecStartPre=-/usr/bin/podman rm --force hermes-agent-%i
+ExecStartPre=-/usr/bin/podman rm --force hermes-%i
 ExecStart=runagent /usr/bin/podman run \
-		--name hermes-agent-%i \
+		--name hermes-%i \
 		--replace \
 		--rm \
 		--sdnotify=conmon \
 		--cgroups=no-conmon \
-		--publish 127.0.0.1:${AGENT_DASHBOARD_HOST_PORT}:9119 \
+		--pod hermes-pod-%i \
+		--userns=keep-id \
 		--env-file %S/state/agent_%i.env \
 		--env-file %S/state/agent_%i_secrets.env \
+		--env API_SERVER_ENABLED=true \
+		--env API_SERVER_HOST=127.0.0.1 \
 		--volume hermes-agent-%i-home:/opt/data:Z \
 		--tz=${TIMEZONE} \
-		--network=slirp4netns:allow_host_loopback=true \
-		${HERMES_AGENT_HERMES_IMAGE}
-ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-agent-%i
-ExecStopPost=-/usr/bin/podman rm --force hermes-agent-%i
+		${HERMES_AGENT_HERMES_IMAGE} \
+		gateway run
+ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-%i
+ExecStopPost=-/usr/bin/podman rm --force hermes-%i
 TimeoutStopSec=70
 
 [Install]
