@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+
+import json
+import sys
+from pathlib import Path
+
+json.load(sys.stdin)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
+
+from hermes_user_domain import get_domain_details, list_user_domains
+
+
+domains = []
+for domain_name in list_user_domains():
+    domain_details = get_domain_details(domain_name) or {}
+    domains.append(
+        {
+            "name": domain_name,
+            "schema": domain_details.get("schema") or "",
+            "location": domain_details.get("location") or "",
+        }
+    )
+
+json.dump({"domains": domains}, fp=sys.stdout)

@@ -2,8 +2,8 @@
 Description=Hermes gateway %i
 Requires=hermes-pod@%i.service
 After=hermes-pod@%i.service
-Wants=hermes-dashboard@%i.service
-Before=hermes-dashboard@%i.service
+Wants=hermes-dashboard@%i.service hermes-auth@%i.service
+Before=hermes-dashboard@%i.service hermes-auth@%i.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n

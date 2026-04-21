@@ -4,8 +4,35 @@ set -e
 
 HERMES_HOME="${HERMES_HOME:-/opt/data}"
 INSTALL_DIR="/opt/hermes"
+PACKAGED_WEB_DIST="${INSTALL_DIR}/ns8-web-dist"
 
 source "${INSTALL_DIR}/.venv/bin/activate"
+
+if [ -d "$PACKAGED_WEB_DIST" ]; then
+    export HERMES_WEB_DIST="$PACKAGED_WEB_DIST"
+
+    if [ -n "${BASE_URL:-}" ]; then
+        export HERMES_WEB_DIST="/tmp/hermes-web-dist"
+        rm -rf "$HERMES_WEB_DIST"
+        cp -a "$PACKAGED_WEB_DIST" "$HERMES_WEB_DIST"
+
+        python3 - "$HERMES_WEB_DIST/index.html" "$BASE_URL" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+index_path = Path(sys.argv[1])
+base_url = sys.argv[2].rstrip("/") or "/"
+marker = "window.__HERMES_BASE_URL__"
+script = f"<script>{marker}={json.dumps(base_url)};</script>"
+
+html = index_path.read_text(encoding="utf-8")
+if marker not in html:
+    html = html.replace("</head>", f"{script}</head>", 1)
+    index_path.write_text(html, encoding="utf-8")
+PY
+    fi
+fi
 
 # Create essential directory structure.  Cache and platform directories
 # (cache/images, cache/audio, platforms/whatsapp, etc.) are created on
@@ -34,11 +61,6 @@ fi
 # Sync bundled skills (manifest-based so user edits are preserved)
 if [ -d "$INSTALL_DIR/skills" ]; then
     python3 "$INSTALL_DIR/tools/skills_sync.py"
-fi
-
-if [ ! -z "$BASE_URL" ]; then
-    sed -i 's#<BrowserRouter>#<BrowserRouter basename="/'"$BASE_URL"'">#' /opt/hermes/web/src/main.tsx
-    sed -i '/export default defineConfig({/a\  base: "/'"$BASE_URL"'/",' /opt/hermes/web/vite.config.ts
 fi
 
 exec hermes "$@"

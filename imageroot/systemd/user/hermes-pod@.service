@@ -1,6 +1,6 @@
 [Unit]
 Description=Hermes pod %i
-Before=hermes@%i.service hermes-dashboard@%i.service
+Before=hermes@%i.service hermes-dashboard@%i.service hermes-auth@%i.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n

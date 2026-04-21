@@ -27,6 +27,10 @@
                 }
             ]
         },
+        "user_domain": {
+            "type": "string",
+            "description": "Selected NS8 user domain used to authenticate dashboard logins when shared dashboard publishing is enabled. Leave empty to disable domain-backed dashboard authentication setup."
+        },
         "lets_encrypt": {
             "type": "boolean",
             "description": "Request a Let's Encrypt certificate for the shared dashboard virtualhost when routes are published through Traefik."
@@ -72,6 +76,10 @@
                             "start",
                             "stop"
                         ]
+                    },
+                    "allowed_user": {
+                        "type": "string",
+                        "description": "Bare username from the selected NS8 user domain that is allowed to access this agent dashboard when shared dashboard publishing is enabled."
                     }
                 }
             }

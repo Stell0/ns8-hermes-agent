@@ -19,6 +19,7 @@ def normalize_agents(raw_agents):
                 "name": agent_data["name"].strip(),
                 "role": agent_data["role"],
                 "status": agent_data["status"],
+                "allowed_user": (agent_data.get("allowed_user") or "").strip(),
             }
         )
 

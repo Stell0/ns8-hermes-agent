@@ -24,5 +24,6 @@ for agent_id in sorted(set(list_known_agent_ids()) - desired_ids):
     run(["podman", "pod", "rm", "--force", f"hermes-pod-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-dashboard-{agent_id}"], check=False)
+    run(["podman", "rm", "--force", f"hermes-auth-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-agent-{agent_id}"], check=False)
     run(["runagent", "remove-agent-state", "--agent-id", str(agent_id)])

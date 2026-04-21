@@ -16,9 +16,11 @@ from hermes_agent_state import (
     LETS_ENCRYPT_PREVIOUS_ENV,
     TIMEZONE_DEFAULT,
     TIMEZONE_ENV,
+    USER_DOMAIN_ENV,
     bool_to_env,
     env_to_bool,
 )
+from hermes_user_domain import normalize_user_domain
 
 
 def normalize_base_virtualhost(value):
@@ -43,6 +45,13 @@ if "base_virtualhost" in request:
         agent.unset_env(BASE_VIRTUALHOST_ENV)
 else:
     agent.unset_env(BASE_VIRTUALHOST_PREVIOUS_ENV)
+
+if "user_domain" in request:
+    user_domain = normalize_user_domain(request.get("user_domain"))
+    if user_domain:
+        agent.set_env(USER_DOMAIN_ENV, user_domain)
+    else:
+        agent.unset_env(USER_DOMAIN_ENV)
 
 if "lets_encrypt" in request:
     lets_encrypt = request.get("lets_encrypt") is True

@@ -1,0 +1,35 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "list-user-domains output",
+    "$id": "http://schema.nethserver.org/hermes-agent/list-user-domains-output.json",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "domains"
+    ],
+    "properties": {
+        "domains": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "name",
+                    "schema",
+                    "location"
+                ],
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "schema": {
+                        "type": "string"
+                    },
+                    "location": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}

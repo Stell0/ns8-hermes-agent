@@ -12,13 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 
 from hermes_agent_state import (
     AGENT_SECRET_KEY,
+    AGENT_ALLOWED_USER_ENV,
     AGENT_DASHBOARD_HOST_PORT_ENV,
     BASE_VIRTUALHOST_ENV,
     SMTP_PUBLIC_KEYS,
     SMTP_SECRET_KEY,
+    USER_DOMAIN_ENV,
     agent_dashboard_host_port,
     read_agents_from_state,
 )
+from hermes_user_domain import public_runtime_env, secrets_runtime_env
 
 
 def timezone_value(shared_environment=None):
@@ -62,6 +65,14 @@ def build_agent_public_env(agent_data, shared_environment):
     if base_virtualhost:
         env_data[BASE_VIRTUALHOST_ENV] = base_virtualhost
 
+    allowed_user = (agent_data.get("allowed_user") or "").strip()
+    if allowed_user:
+        env_data[AGENT_ALLOWED_USER_ENV] = allowed_user
+
+    user_domain = (shared_environment.get(USER_DOMAIN_ENV) or "").strip().lower()
+    if user_domain:
+        env_data.update(public_runtime_env(user_domain))
+
     for key in SMTP_PUBLIC_KEYS:
         value = shared_environment.get(key)
         if value:
@@ -70,7 +81,7 @@ def build_agent_public_env(agent_data, shared_environment):
     return env_data
 
 
-def build_agent_secrets(existing_agent_secrets, shared_secrets):
+def build_agent_secrets(existing_agent_secrets, shared_secrets, shared_environment):
     env_data = {
         AGENT_SECRET_KEY: existing_agent_secrets.get(AGENT_SECRET_KEY) or generate_secret(),
     }
@@ -78,6 +89,10 @@ def build_agent_secrets(existing_agent_secrets, shared_secrets):
     smtp_password = shared_secrets.get(SMTP_SECRET_KEY)
     if smtp_password:
         env_data[SMTP_SECRET_KEY] = smtp_password
+
+    user_domain = (shared_environment.get(USER_DOMAIN_ENV) or "").strip().lower()
+    if user_domain:
+        env_data.update(secrets_runtime_env(user_domain))
 
     return env_data
 
@@ -93,7 +108,7 @@ def sync_agent_runtime_files(agent_id=None):
             build_agent_public_env(agent_data, shared_environment),
         )
         existing_agent_secrets = read_optional_envfile(Path(f"agent_{agent_data['id']}_secrets.env"))
-        agent_secrets = build_agent_secrets(existing_agent_secrets, shared_secrets)
+        agent_secrets = build_agent_secrets(existing_agent_secrets, shared_secrets, shared_environment)
         agent.write_envfile(
             Path(f"agent_{agent_data['id']}_secrets.env"),
             agent_secrets,

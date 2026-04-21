@@ -8,12 +8,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
 from hermes_agent_state import BASE_VIRTUALHOST_ENV, LETS_ENCRYPT_ENV, env_to_bool, read_agents_from_state
+from hermes_agent_state import USER_DOMAIN_ENV
 
 
 
 json.dump(
     {
         "base_virtualhost": (os.getenv(BASE_VIRTUALHOST_ENV) or "").strip().lower(),
+        "user_domain": (os.getenv(USER_DOMAIN_ENV) or "").strip().lower(),
         "lets_encrypt": env_to_bool(os.getenv(LETS_ENCRYPT_ENV)),
         "agents": read_agents_from_state(),
     },

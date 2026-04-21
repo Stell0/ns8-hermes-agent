@@ -46,7 +46,9 @@ BASE_VIRTUALHOST_ENV = "BASE_VIRTUALHOST"
 BASE_VIRTUALHOST_PREVIOUS_ENV = "_HERMES_BASE_VIRTUALHOST_PREVIOUS"
 LETS_ENCRYPT_ENV = "LETS_ENCRYPT"
 LETS_ENCRYPT_PREVIOUS_ENV = "_HERMES_LETS_ENCRYPT_PREVIOUS"
+USER_DOMAIN_ENV = "USER_DOMAIN"
 AGENT_DASHBOARD_HOST_PORT_ENV = "AGENT_DASHBOARD_HOST_PORT"
+AGENT_ALLOWED_USER_ENV = "AGENT_ALLOWED_USER"
 DASHBOARD_PORT = 9119
 BASE_VIRTUALHOST_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$"
@@ -59,14 +61,6 @@ def env_to_bool(value):
 
 def bool_to_env(value):
     return "true" if value else "false"
-
-
-def soul_template_for_role(role):
-    if role not in ALLOWED_ROLES:
-        raise ValueError(f"invalid role: {role}")
-
-    return SOUL_TEMPLATES_DIR / f"{role}.md.in"
-
 
 def ensure_private_directory(path):
     directory_path = Path(path)
@@ -229,7 +223,7 @@ def agent_dashboard_host_port(agent_id, shared_environment=None):
 
 def read_agents_from_state():
     def validate_agent_metadata(agent_data, index):
-        extra_fields = sorted(set(agent_data) - {"id", "name", "role", "status"})
+        extra_fields = sorted(set(agent_data) - {"id", "name", "role", "status", "allowed_user"})
         if extra_fields:
             raise ValueError(
                 f"agent at index {index} has unexpected fields: {', '.join(extra_fields)}"
@@ -255,11 +249,20 @@ def read_agents_from_state():
         if status not in ALLOWED_STATUSES:
             raise ValueError(f"agent at index {index} has an invalid status")
 
+        raw_allowed_user = agent_data.get("allowed_user", "")
+        if raw_allowed_user is None:
+            raw_allowed_user = ""
+        if not isinstance(raw_allowed_user, str):
+            raise ValueError(f"agent at index {index} has an invalid allowed_user")
+
+        allowed_user = raw_allowed_user.strip()
+
         return {
             "id": agent_id,
             "name": name,
             "role": role,
             "status": status,
+            "allowed_user": allowed_user,
         }
 
     agents = []

@@ -1,0 +1,16 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "list-domain-users input",
+    "$id": "http://schema.nethserver.org/hermes-agent/list-domain-users-input.json",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "domain"
+    ],
+    "properties": {
+        "domain": {
+            "type": "string",
+            "minLength": 1
+        }
+    }
+}

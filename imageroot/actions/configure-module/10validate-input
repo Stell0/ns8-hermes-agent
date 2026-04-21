@@ -15,6 +15,13 @@ from hermes_agent_state import (
     MAX_AGENTS,
     NAME_PATTERN,
 )
+from hermes_user_domain import (
+    auth_required,
+    get_domain_details,
+    list_domain_usernames,
+    normalize_allowed_user,
+    normalize_user_domain,
+)
 
 
 def fail(field, parameter, value, error, exit_code=2):
@@ -42,12 +49,22 @@ if "base_virtualhost" in request:
     base_virtualhost = (request.get("base_virtualhost") or "").strip().lower()
     if base_virtualhost and not BASE_VIRTUALHOST_PATTERN.fullmatch(base_virtualhost):
         fail("base_virtualhost", "base_virtualhost", request.get("base_virtualhost"), "base_virtualhost_invalid")
+else:
+    base_virtualhost = ""
+
+if "user_domain" in request and not isinstance(request.get("user_domain"), str):
+    fail("user_domain", "user_domain", request.get("user_domain"), "user_domain_invalid")
+
+user_domain = normalize_user_domain(request.get("user_domain"))
 
 if "lets_encrypt" in request and not isinstance(request.get("lets_encrypt"), bool):
     fail("lets_encrypt", "lets_encrypt", request.get("lets_encrypt"), "lets_encrypt_invalid")
 
 agents = request.get("agents", [])
 seen_ids = set()
+
+requires_auth = auth_required(base_virtualhost, agents)
+allowed_users = []
 
 for index, agent_data in enumerate(agents):
     agent_id = agent_data.get("id")
@@ -70,3 +87,32 @@ for index, agent_data in enumerate(agents):
     status = agent_data.get("status")
     if status not in ALLOWED_STATUSES:
         fail(f"agents[{index}].status", "agents", status, "agent_status_invalid")
+
+    allowed_user = normalize_allowed_user(agent_data.get("allowed_user"))
+    if agent_data.get("allowed_user") is not None and not isinstance(agent_data.get("allowed_user"), str):
+        fail(f"agents[{index}].allowed_user", "agents", agent_data.get("allowed_user"), "agent_allowed_user_invalid")
+
+    if requires_auth and not allowed_user:
+        fail(f"agents[{index}].allowed_user", "agents", agent_data.get("allowed_user"), "agent_allowed_user_required")
+
+    if allowed_user:
+        allowed_users.append((index, allowed_user))
+
+if requires_auth and not user_domain:
+    fail("user_domain", "user_domain", request.get("user_domain"), "user_domain_required")
+
+if user_domain:
+    domain_details = get_domain_details(user_domain)
+    if domain_details is None:
+        fail("user_domain", "user_domain", request.get("user_domain"), "user_domain_invalid")
+
+    if allowed_users:
+        known_users = list_domain_usernames(user_domain)
+        for index, allowed_user in allowed_users:
+            if allowed_user not in known_users:
+                fail(
+                    f"agents[{index}].allowed_user",
+                    "agents",
+                    allowed_user,
+                    "agent_allowed_user_invalid",
+                )
