@@ -4,17 +4,30 @@ set -e
 
 HERMES_HOME="${HERMES_HOME:-/opt/data}"
 INSTALL_DIR="/opt/hermes"
-PACKAGED_WEB_DIST="${INSTALL_DIR}/ns8-web-dist"
+WEB_SOURCE_DIR="${INSTALL_DIR}/web"
+BUILT_WEB_DIST="${INSTALL_DIR}/hermes_cli/web_dist"
+PATCH_SCRIPT="${INSTALL_DIR}/patch_dashboard_source.py"
 
 source "${INSTALL_DIR}/.venv/bin/activate"
 
-if [ -d "$PACKAGED_WEB_DIST" ]; then
-    export HERMES_WEB_DIST="$PACKAGED_WEB_DIST"
+prepare_dashboard_web_ui() {
+    if [ ! -d "$WEB_SOURCE_DIR" ]; then
+        return
+    fi
+
+    python3 "$PATCH_SCRIPT" "$INSTALL_DIR"
+
+    (
+        cd "$WEB_SOURCE_DIR"
+        npm run build
+    )
+
+    export HERMES_WEB_DIST="$BUILT_WEB_DIST"
 
     if [ -n "${BASE_URL:-}" ]; then
         export HERMES_WEB_DIST="/tmp/hermes-web-dist"
         rm -rf "$HERMES_WEB_DIST"
-        cp -a "$PACKAGED_WEB_DIST" "$HERMES_WEB_DIST"
+        cp -a "$BUILT_WEB_DIST" "$HERMES_WEB_DIST"
 
         python3 - "$HERMES_WEB_DIST/index.html" "$BASE_URL" <<'PY'
 import json
@@ -38,6 +51,12 @@ elif "<base href=" not in html:
     index_path.write_text(html, encoding="utf-8")
 PY
     fi
+}
+
+if [ "${1:-}" = "dashboard" ]; then
+    prepare_dashboard_web_ui
+elif [ -d "$BUILT_WEB_DIST" ]; then
+    export HERMES_WEB_DIST="$BUILT_WEB_DIST"
 fi
 
 # Create essential directory structure.  Cache and platform directories

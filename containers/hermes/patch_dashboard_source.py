@@ -6,6 +6,8 @@ from pathlib import Path
 
 def replace_once(path, old, new):
     content = path.read_text(encoding="utf-8")
+    if new in content:
+        return
     if old not in content:
         raise SystemExit(f"expected snippet not found in {path}")
 

@@ -1,18 +1,3 @@
-FROM docker.io/node:24.11.1-slim AS dashboard-builder
-ARG HERMES_SOURCE_REF=v2026.4.16
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    git \
-    python3 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /src
-RUN git clone --depth 1 --branch "${HERMES_SOURCE_REF}" https://github.com/NousResearch/hermes-agent.git hermes-agent
-COPY patch_dashboard_source.py /tmp/patch_dashboard_source.py
-RUN python3 /tmp/patch_dashboard_source.py /src/hermes-agent
-WORKDIR /src/hermes-agent/web
-RUN npm install && npm run build
-
 FROM docker.io/nousresearch/hermes-agent:v2026.4.16
 LABEL org.opencontainers.image.title="hermes-agent-hermes"
 LABEL org.opencontainers.image.description="Thin wrapper around the upstream Hermes runtime image"
@@ -30,7 +15,7 @@ RUN pip install --no-cache-dir --break-system-packages \
     pytesseract \
     pdf2image
 
-COPY --from=dashboard-builder /src/hermes-agent/hermes_cli/web_dist /opt/hermes/ns8-web-dist
+COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py
 COPY entrypoint.sh /entrypoint.sh
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
 

@@ -770,9 +770,9 @@ class HermesModuleStateTest(unittest.TestCase):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
         self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.4.16", containerfile)
-        self.assertIn("FROM docker.io/node:24.11.1-slim AS dashboard-builder", containerfile)
-        self.assertIn("COPY patch_dashboard_source.py /tmp/patch_dashboard_source.py", containerfile)
-        self.assertIn("COPY --from=dashboard-builder /src/hermes-agent/hermes_cli/web_dist /opt/hermes/ns8-web-dist", containerfile)
+        self.assertNotIn("FROM docker.io/node:24.11.1-slim AS dashboard-builder", containerfile)
+        self.assertIn("COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py", containerfile)
+        self.assertNotIn("ns8-web-dist", containerfile)
 
     def test_auth_containerfile_installs_proxy_runtime(self):
         containerfile = AUTH_CONTAINERFILE_PATH.read_text(encoding="utf-8")
@@ -788,13 +788,19 @@ class HermesModuleStateTest(unittest.TestCase):
 
         self.assertIn('source "${INSTALL_DIR}/.venv/bin/activate"', entrypoint)
         self.assertNotIn("source .venv/bin/activate", entrypoint)
-        self.assertIn('export HERMES_WEB_DIST="$PACKAGED_WEB_DIST"', entrypoint)
+        self.assertIn('WEB_SOURCE_DIR="${INSTALL_DIR}/web"', entrypoint)
+        self.assertIn('BUILT_WEB_DIST="${INSTALL_DIR}/hermes_cli/web_dist"', entrypoint)
+        self.assertIn('python3 "$PATCH_SCRIPT" "$INSTALL_DIR"', entrypoint)
+        self.assertIn("npm run build", entrypoint)
+        self.assertIn('if [ "${1:-}" = "dashboard" ]; then', entrypoint)
+        self.assertIn('export HERMES_WEB_DIST="$BUILT_WEB_DIST"', entrypoint)
         self.assertIn("<base href=", entrypoint)
         self.assertIn("window.__HERMES_BASE_URL__", entrypoint)
 
     def test_dashboard_patch_script_updates_upstream_source(self):
         patch_script = HERMES_DASHBOARD_PATCH_PATH.read_text(encoding="utf-8")
 
+        self.assertIn("if new in content:", patch_script)
         self.assertIn("<BrowserRouter basename={BASE_URL}>", patch_script)
         self.assertIn('const BASE = typeof window !== "undefined" ? window.__HERMES_BASE_URL__ ?? "" : "";', patch_script)
         self.assertIn('const cssUrl = `${DASHBOARD_BASE_URL}/dashboard-plugins/${manifest.name}/${manifest.css}`;', patch_script)
