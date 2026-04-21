@@ -85,10 +85,10 @@ This document maps the current layout.
 ## `containers/`
 
 - `containers/auth/Containerfile`: per-agent dashboard auth proxy image.
-- `containers/auth/authproxy.py`: FastAPI auth proxy that authenticates each published dashboard route against LDAP, issues a path-scoped session cookie, and proxies requests to the internal dashboard.
+- `containers/auth/authproxy.py`: FastAPI auth proxy that authenticates each published dashboard route against LDAP, issues a path-scoped session cookie, logs auth attempts and outcomes to stdout, and proxies requests to the internal dashboard.
 - `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.16`, plus a builder stage that patches and rebuilds the upstream dashboard bundle for prefix-aware routing.
-- `containers/hermes/entrypoint.sh`: wrapper entrypoint that bootstraps the Hermes home volume, injects the runtime `BASE_URL` into the rebuilt dashboard bundle, and then delegates to the upstream CLI.
-- `containers/hermes/patch_dashboard_source.py`: source-level patch script applied during the Hermes image build to make the upstream dashboard bundle prefix-aware.
+- `containers/hermes/entrypoint.sh`: wrapper entrypoint that bootstraps the Hermes home volume, injects the runtime `BASE_URL` plus an HTML `<base href>` into the rebuilt dashboard bundle, and then delegates to the upstream CLI.
+- `containers/hermes/patch_dashboard_source.py`: source-level patch script applied during the Hermes image build to make the upstream dashboard bundle prefix-aware across routing, API calls, plugin assets, and static asset paths.
 
 ## `ui/`
 

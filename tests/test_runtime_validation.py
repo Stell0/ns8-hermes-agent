@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import io
 import json
@@ -401,6 +402,40 @@ class HermesAuthProxyTest(unittest.TestCase):
         with mocked_authproxy_dependencies():
             return load_module(AUTHPROXY_PATH, module_name)
 
+    def runtime_config(self, authproxy, **overrides):
+        values = {
+            "agent_id": "1",
+            "agent_name": "Agent One",
+            "allowed_user": "alice",
+            "user_domain": "example.org",
+            "ldap_host": "ldap.example.org",
+            "ldap_port": 389,
+            "ldap_base_dn": "dc=example,dc=org",
+            "ldap_schema": "rfc2307",
+            "ldap_bind_dn": "",
+            "ldap_bind_password": "",
+            "session_secret": "test-secret",
+            "dashboard_upstream_url": "http://127.0.0.1:9120",
+            "base_url": "/hermes-1",
+        }
+        values.update(overrides)
+        return authproxy.RuntimeConfig(**values)
+
+    def make_request(self, client, headers=None, cookies=None, path="/", query=""):
+        class FakeRequest:
+            def __init__(self):
+                self.method = "GET"
+                self.headers = headers or {}
+                self.cookies = cookies or {}
+                self.url = types.SimpleNamespace(path=path, query=query)
+                self.app = types.SimpleNamespace(state=types.SimpleNamespace(client=client))
+                self.client = types.SimpleNamespace(host="198.51.100.42")
+
+            async def body(self):
+                return b""
+
+        return FakeRequest()
+
     def test_authproxy_uses_fastapi_lifespan(self):
         authproxy = self.load_authproxy()
 
@@ -425,6 +460,81 @@ class HermesAuthProxyTest(unittest.TestCase):
             authproxy.user_search_filter("ali*(ce)", "rfc2307"),
             "(|(uid=ali\\2a\\28ce\\29)(cn=ali\\2a\\28ce\\29)(mail=ali\\2a\\28ce\\29))",
         )
+
+    def test_proxy_logs_successful_basic_authentication(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                del args, kwargs
+                return types.SimpleNamespace(content=b"ok", status_code=200, headers={})
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"x-forwarded-prefix": "/hermes-1"},
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "read_session",
+            return_value=None,
+        ), mock.patch.object(
+            authproxy,
+            "parse_basic_auth",
+            return_value=("alice", "secret"),
+        ), mock.patch.object(
+            authproxy,
+            "authenticate_credentials",
+            return_value=True,
+        ), mock.patch.object(authproxy.LOGGER, "info") as log_info:
+            response = asyncio.run(authproxy.proxy("", request))
+
+        self.assertEqual(response.kwargs["status_code"], 200)
+        self.assertEqual(response.cookie_kwargs["path"], "/hermes-1")
+        logged_messages = [call.args[0] for call in log_info.call_args_list]
+        self.assertEqual(len(logged_messages), 2)
+        self.assertIn("event=auth_attempt", logged_messages[0])
+        self.assertIn("auth_method=basic", logged_messages[0])
+        self.assertIn("user=alice", logged_messages[0])
+        self.assertIn("event=auth_success", logged_messages[1])
+        self.assertIn("auth_method=basic", logged_messages[1])
+        self.assertIn("user=alice", logged_messages[1])
+
+    def test_proxy_logs_failed_authentication(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("upstream should not be called when auth fails")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"x-forwarded-prefix": "/hermes-1"},
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "read_session",
+            return_value=None,
+        ), mock.patch.object(
+            authproxy,
+            "parse_basic_auth",
+            return_value=("alice", "wrong"),
+        ), mock.patch.object(
+            authproxy,
+            "authenticate_credentials",
+            return_value=False,
+        ), mock.patch.object(authproxy.LOGGER, "info") as log_info:
+            response = asyncio.run(authproxy.proxy("", request))
+
+        self.assertEqual(response.kwargs["status_code"], 401)
+        logged_messages = [call.args[0] for call in log_info.call_args_list]
+        self.assertEqual(len(logged_messages), 2)
+        self.assertIn("event=auth_attempt", logged_messages[0])
+        self.assertIn("event=auth_failed", logged_messages[1])
+        self.assertIn("detail=invalid_credentials", logged_messages[1])
 
 
 class HermesModuleStateTest(unittest.TestCase):
@@ -679,6 +789,7 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn('source "${INSTALL_DIR}/.venv/bin/activate"', entrypoint)
         self.assertNotIn("source .venv/bin/activate", entrypoint)
         self.assertIn('export HERMES_WEB_DIST="$PACKAGED_WEB_DIST"', entrypoint)
+        self.assertIn("<base href=", entrypoint)
         self.assertIn("window.__HERMES_BASE_URL__", entrypoint)
 
     def test_dashboard_patch_script_updates_upstream_source(self):

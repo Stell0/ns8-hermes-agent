@@ -101,7 +101,7 @@ Build the module image, auth proxy image, and Hermes wrapper image with:
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.16` and now rebuilds the upstream dashboard web bundle with prefix support for `/hermes-N/` routes.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.16` and rebuilds the upstream dashboard web bundle with prefix support for `/hermes-N/` routes. At runtime the wrapper also injects both `window.__HERMES_BASE_URL__` and an HTML `<base href>` into the served dashboard `index.html` so built assets resolve correctly under the shared virtualhost path.
 
 The script uses:
 
@@ -192,6 +192,7 @@ Example output:
 
 If `base_virtualhost` is configured, each agent dashboard is available at `https://<base_virtualhost>/hermes-N/`.
 Access is authenticated against the shared `user_domain`, and each route only admits that agent's configured `allowed_user`.
+The auth proxy logs `auth_attempt`, `auth_success`, and `auth_failed` events to standard output for troubleshooting published dashboard access.
 
 ## Runtime unit
 
@@ -212,7 +213,7 @@ Each started agent runs:
 Restart supervision is owned by the systemd user units with `Restart=on-failure`; the Podman pod and container launches do not set container-level restart policies.
 The shipped services create one named volume per agent mounted at `/opt/data`.
 Managed `SOUL.md` and home `.env` seeding runs before service start in `configure-module/75seed-agent-home`; later agent edits preserve existing files inside the volume.
-The Hermes gateway container reads `agent_<id>.env` and `agent_<id>_secrets.env`. The dashboard container reads the shared volume, probes the gateway over the pod network namespace, and stays internal on `127.0.0.1:9120`. The auth proxy container reads the generated per-agent auth env and secrets, authenticates the route against LDAP, and owns the published pod port `9119`.
+The Hermes gateway container reads `agent_<id>.env` and `agent_<id>_secrets.env`. The dashboard container reads the shared volume, probes the gateway over the pod network namespace, stays internal on `127.0.0.1:9120`, and serves an `index.html` patched at runtime with both the dashboard base URL and an HTML base tag. The auth proxy container reads the generated per-agent auth env and secrets, authenticates the route against LDAP, logs auth events to stdout, and owns the published pod port `9119`.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/hermes-N/` to the pod-published auth proxy port with `strip_prefix` and `X-Forwarded-Prefix` headers so the dashboard stays prefix-aware.
 
 ## UI development

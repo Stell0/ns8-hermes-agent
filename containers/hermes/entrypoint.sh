@@ -23,12 +23,18 @@ from pathlib import Path
 
 index_path = Path(sys.argv[1])
 base_url = sys.argv[2].rstrip("/") or "/"
+base_href = f"{base_url.rstrip('/')}/" if base_url != "/" else "/"
 marker = "window.__HERMES_BASE_URL__"
 script = f"<script>{marker}={json.dumps(base_url)};</script>"
+base_tag = f"<base href={json.dumps(base_href)} />"
 
 html = index_path.read_text(encoding="utf-8")
+if "<base href=" not in html:
+    html = html.replace("</head>", f"{base_tag}</head>", 1)
 if marker not in html:
     html = html.replace("</head>", f"{script}</head>", 1)
+    index_path.write_text(html, encoding="utf-8")
+elif "<base href=" not in html:
     index_path.write_text(html, encoding="utf-8")
 PY
     fi

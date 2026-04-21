@@ -168,8 +168,8 @@ For agent `1`, the runtime looks like:
 Restart supervision is owned by `hermes@<id>.service`, `hermes-dashboard@<id>.service`, and `hermes-auth@<id>.service` with `Restart=on-failure`; the Podman pod and container launches do not set container-level restart policies.
 The services invoke Podman and the runtime creates one Podman-managed volume per agent.
 Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes@<id>.service` starts. Later configure runs preserve existing files inside the volume.
-The gateway container runs `hermes gateway run`, the sidecar dashboard container runs `hermes dashboard --host 127.0.0.1 --port 9120` against the shared pod network namespace, and the auth sidecar listens on `9119` and authenticates access against the shared `user_domain` plus per-agent `allowed_user`.
-The Hermes wrapper image rebuilds the upstream dashboard web bundle with prefix-aware routing and API paths, then injects the runtime `BASE_URL` into the served `index.html`.
+The gateway container runs `hermes gateway run`, the sidecar dashboard container runs `hermes dashboard --host 127.0.0.1 --port 9120` against the shared pod network namespace, and the auth sidecar listens on `9119`, authenticates access against the shared `user_domain` plus per-agent `allowed_user`, and logs auth attempts plus outcomes to stdout.
+The Hermes wrapper image rebuilds the upstream dashboard web bundle with prefix-aware routing and API paths, then injects both the runtime `BASE_URL` and an HTML `<base href>` into the served `index.html`.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/hermes-N/` to the auth proxy listener selected from the module-owned 30-port pool.
 
 ## Template seeding

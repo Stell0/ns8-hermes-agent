@@ -2,7 +2,9 @@
 
 import base64
 import binascii
+import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from html import escape
@@ -28,6 +30,7 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+LOGGER = logging.getLogger("hermes.authproxy")
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,22 @@ class RuntimeConfig:
 
 def env(name, default=""):
     return (os.getenv(name, default) or "").strip()
+
+
+def configure_logging():
+    if LOGGER.handlers:
+        return
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    LOGGER.addHandler(handler)
+    LOGGER.propagate = False
+
+    level_name = env("AUTH_PROXY_LOG_LEVEL", "INFO").upper()
+    LOGGER.setLevel(getattr(logging, level_name, logging.INFO))
+
+
+configure_logging()
 
 
 def normalize_prefix(value):
@@ -103,6 +122,29 @@ def session_serializer(config):
 def request_prefix(request, config):
     forwarded_prefix = request.headers.get("x-forwarded-prefix", "")
     return normalize_prefix(forwarded_prefix) or config.base_url or "/"
+
+
+def client_host(request):
+    client = getattr(request, "client", None)
+    return getattr(client, "host", "-") or "-"
+
+
+def log_auth_event(event, request, config, prefix, username="", auth_method="", detail=""):
+    parts = [
+        f"event={event}",
+        f"agent_id={config.agent_id or '-'}",
+        f"method={getattr(request, 'method', '-')}",
+        f"path={getattr(getattr(request, 'url', None), 'path', '-')}",
+        f"prefix={prefix or '/'}",
+        f"remote={client_host(request)}",
+    ]
+    if username:
+        parts.append(f"user={username}")
+    if auth_method:
+        parts.append(f"auth_method={auth_method}")
+    if detail:
+        parts.append(f"detail={detail}")
+    LOGGER.info(" ".join(parts))
 
 
 def parse_basic_auth(request):
@@ -326,10 +368,55 @@ async def proxy(path: str, request: Request):
     session_is_new = False
     if authenticated_user is None:
         credentials = parse_basic_auth(request)
-        if credentials is None or not authenticate_credentials(credentials[0], credentials[1], config):
+        attempted_user = credentials[0] if credentials else ""
+        log_auth_event(
+            "auth_attempt",
+            request,
+            config,
+            prefix,
+            username=attempted_user,
+            auth_method="basic" if credentials else "none",
+        )
+        if credentials is None:
+            log_auth_event(
+                "auth_failed",
+                request,
+                config,
+                prefix,
+                auth_method="none",
+                detail="missing_basic_auth",
+            )
+            return challenge_response(config)
+        if not authenticate_credentials(credentials[0], credentials[1], config):
+            log_auth_event(
+                "auth_failed",
+                request,
+                config,
+                prefix,
+                username=attempted_user,
+                auth_method="basic",
+                detail="invalid_credentials",
+            )
             return challenge_response(config)
         authenticated_user = credentials[0]
         session_is_new = True
+        log_auth_event(
+            "auth_success",
+            request,
+            config,
+            prefix,
+            username=authenticated_user,
+            auth_method="basic",
+        )
+    else:
+        log_auth_event(
+            "auth_success",
+            request,
+            config,
+            prefix,
+            username=authenticated_user,
+            auth_method="session",
+        )
 
     upstream_url = f"{config.dashboard_upstream_url}{request.url.path}"
     if request.url.query:
