@@ -24,6 +24,7 @@ SESSION_TTL_SECONDS = 8 * 60 * 60
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
 TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)/?$")
+AUTHENTICATED_USER_HEADER = "X-Hermes-Authenticated-User"
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -568,13 +569,15 @@ def request_next_path(request):
     return path
 
 
-def upstream_headers(request):
+def upstream_headers(request, authenticated_username=""):
     forwarded_headers = {}
     for name, value in request.headers.items():
         lower_name = name.lower()
-        if lower_name in HOP_BY_HOP_HEADERS or lower_name in {"authorization", "host", "content-length"}:
+        if lower_name in HOP_BY_HOP_HEADERS or lower_name in {"host", "content-length"}:
             continue
         if lower_name == "cookie":
+            continue
+        if lower_name == AUTHENTICATED_USER_HEADER.lower():
             continue
         forwarded_headers[name] = value
 
@@ -585,6 +588,9 @@ def upstream_headers(request):
     ]
     if filtered_cookies:
         forwarded_headers["Cookie"] = "; ".join(filtered_cookies)
+
+    if authenticated_username:
+        forwarded_headers[AUTHENTICATED_USER_HEADER] = authenticated_username
 
     forwarded_headers["X-Forwarded-Proto"] = request.headers.get("x-forwarded-proto", "http")
     forwarded_headers["X-Forwarded-Host"] = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
@@ -606,7 +612,7 @@ def response_headers(upstream_response, upstream_base_url):
     return headers
 
 
-async def proxy_to_agent(agent_record, request):
+async def proxy_to_agent(agent_record, request, authenticated_username=""):
     upstream_url = f"{agent_record.upstream_url}{request.url.path}"
     if request.url.query:
         upstream_url = f"{upstream_url}?{request.url.query}"
@@ -622,7 +628,7 @@ async def proxy_to_agent(agent_record, request):
         upstream_response = await request.app.state.client.request(
             method=request.method,
             url=upstream_url,
-            headers=upstream_headers(request),
+            headers=upstream_headers(request, authenticated_username=authenticated_username),
             content=await request.body(),
         )
     except httpx.RequestError as exc:
@@ -766,7 +772,11 @@ async def proxy(path: str, request: Request):
         username=session_data["username"],
         auth_method="session",
     )
-    return await proxy_to_agent(session_data["agent"], request)
+    return await proxy_to_agent(
+        session_data["agent"],
+        request,
+        authenticated_username=session_data["username"],
+    )
 
 
 if __name__ == "__main__":

@@ -637,6 +637,56 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertIn("agent_id=1", logged_messages[2])
         self.assertIn("detail=upstream_url=http://10.0.2.2:20002/api/status?verbose=1", logged_messages[2])
 
+    def test_proxy_preserves_dashboard_authorization_and_sets_custom_user_header(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        class FakeUpstreamResponse:
+            def __init__(self):
+                self.content = b"ok"
+                self.status_code = 200
+                self.headers = {}
+
+        class FakeUpstreamClient:
+            def __init__(self):
+                self.calls = []
+
+            async def request(self, *args, **kwargs):
+                self.calls.append({"args": args, "kwargs": kwargs})
+                return FakeUpstreamResponse()
+
+        upstream_client = FakeUpstreamClient()
+        request = self.make_request(
+            upstream_client,
+            headers={
+                "Authorization": "Bearer dashboard-token",
+                authproxy.AUTHENTICATED_USER_HEADER: "spoofed-user",
+                "x-forwarded-proto": "https",
+            },
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                ),
+                "dashboard_cookie": "session-cookie",
+            },
+            path="/api/status",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config):
+            response = asyncio.run(authproxy.proxy("api/status", request))
+
+        self.assertEqual(response.kwargs["status_code"], 200)
+        self.assertEqual(len(upstream_client.calls), 1)
+        upstream_headers = upstream_client.calls[0]["kwargs"]["headers"]
+        self.assertEqual(upstream_headers["Authorization"], "Bearer dashboard-token")
+        self.assertEqual(upstream_headers[authproxy.AUTHENTICATED_USER_HEADER], "alice")
+        self.assertEqual(upstream_headers["Cookie"], "dashboard_cookie=session-cookie")
+
 
 class HermesModuleStateTest(unittest.TestCase):
     @classmethod
