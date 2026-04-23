@@ -29,7 +29,7 @@ ExecStart=runagent /usr/bin/podman run \
 		--volume hermes-agent-%i-home:/opt/data:z \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_HERMES_IMAGE} \
-		hermes dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run
+		hermes dashboard --host 127.0.0.1 --port 9120 --insecure --no-open
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-%i
 ExecStopPost=-/usr/bin/podman rm --force hermes-%i
 TimeoutStopSec=70
