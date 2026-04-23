@@ -727,7 +727,6 @@ async def proxy_to_agent(agent_record, request, authenticated_username="", app_n
 
 
 app = FastAPI(lifespan=lifespan)
-app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/health")
@@ -766,7 +765,7 @@ async def proxy(path: str, request: Request):
 
     session_data = read_session(request, config)
 
-    if request.method == "POST" and (current_path == LOGIN_PATH or explicit_agent is not None):
+    if request.method == "POST" and (current_path == LOGIN_PATH or (explicit_agent is not None and explicit_app is None)):
         form_data = await parse_form_body(request)
         username = (form_data.get("username") or "").strip()
         password = form_data.get("password") or ""

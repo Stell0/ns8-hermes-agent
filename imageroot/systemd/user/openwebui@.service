@@ -28,7 +28,6 @@ ExecStart=runagent /usr/bin/podman run \
 		--env WEBUI_AUTH=false \
 		--env ENABLE_OPENAI_API=true \
 		--env OPENAI_API_BASE_URL=http://127.0.0.1:8642/v1 \
-		--env OPENAI_API_KEY=${API_SERVER_KEY} \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_OPENWEBUI_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 openwebui-%i

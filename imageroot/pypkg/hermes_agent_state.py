@@ -159,10 +159,6 @@ def validate_agent_id(agent_id):
         raise ValueError(f"agent id must be between 1 and {MAX_AGENTS}")
 
 
-def validate_agent_id(agent_id):
-    if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
-        raise ValueError(f"agent id must be between 1 and {MAX_AGENTS}")
-
 
 def agent_dashboard_socket_name(agent_id):
     validate_agent_id(agent_id)

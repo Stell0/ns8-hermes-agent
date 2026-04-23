@@ -836,6 +836,72 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertEqual(uds_clients[0].kwargs["transport"].uds, "/sockets/agent-1-chat.sock")
         self.assertEqual(uds_clients[0].calls[0]["kwargs"]["url"], "http://agent-1/api/models?provider=local")
 
+    def test_proxy_routes_chat_post_requests_without_treating_them_as_login_forms(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+
+        class FakeUpstreamResponse:
+            def __init__(self):
+                self.content = b'{"ok":true}'
+                self.status_code = 200
+                self.headers = {"content-type": "application/json"}
+
+        class FakeUdsClient:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+                self.calls = []
+
+            async def request(self, *args, **kwargs):
+                self.calls.append({"args": args, "kwargs": kwargs})
+                return FakeUpstreamResponse()
+
+            async def aclose(self):
+                return None
+
+        uds_clients = []
+
+        def build_fake_client(*args, **kwargs):
+            client = FakeUdsClient(*args, **kwargs)
+            uds_clients.append(client)
+            return client
+
+        request = self.make_request(
+            types.SimpleNamespace(),
+            headers={"content-type": "application/json", "x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/hermes-1/chat/api/chat/completions",
+            method="POST",
+            body=b'{"model":"test"}',
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy.httpx,
+            "AsyncClient",
+            side_effect=build_fake_client,
+        ), mock.patch.object(
+            authproxy.httpx,
+            "AsyncHTTPTransport",
+            side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+        ):
+            response = asyncio.run(authproxy.proxy("hermes-1/chat/api/chat/completions", request))
+
+        self.assertEqual(response.kwargs["status_code"], 200)
+        self.assertEqual(len(uds_clients), 1)
+        self.assertEqual(uds_clients[0].kwargs["transport"].uds, "/sockets/agent-1-chat.sock")
+        self.assertEqual(
+            uds_clients[0].calls[0]["kwargs"]["url"],
+            "http://agent-1/api/chat/completions",
+        )
+        self.assertEqual(uds_clients[0].calls[0]["kwargs"]["content"], b'{"model":"test"}')
+
     def test_proxy_preserves_dashboard_authorization_and_sets_custom_user_header(self):
         authproxy = self.load_authproxy()
         config = self.runtime_config(authproxy)
@@ -1337,7 +1403,7 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
             self.assertEqual(
                 set(agent_secrets),
-                {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "LDAP_BIND_DN", "LDAP_BIND_PASSWORD", "SMTP_PASSWORD"},
+                {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "LDAP_BIND_DN", "LDAP_BIND_PASSWORD", "OPENAI_API_KEY", "SMTP_PASSWORD"},
             )
             self.assertEqual(authproxy_env["USER_DOMAIN"], "example.org")
             self.assertEqual(authproxy_env["LDAP_HOST"], "10.0.2.2")
@@ -1448,7 +1514,7 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], first_sync_secrets["HERMES_AGENT_SECRET"])
             self.assertEqual(agent_secrets["API_SERVER_KEY"], first_sync_secrets["API_SERVER_KEY"])
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "OPENAI_API_KEY", "SMTP_PASSWORD"})
 
     def test_seed_agent_home_action_uses_public_envfile_and_templates_mount(self):
         with mock.patch("sys.stdin", io.StringIO("{}")):
@@ -1860,7 +1926,7 @@ class HermesModuleStateTest(unittest.TestCase):
             agent_secrets = read_envfile(Path("agent_3_secrets.env"))
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], "preserved")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "OPENAI_API_KEY", "SMTP_PASSWORD"})
 
     def test_configure_module_reconciles_removed_and_started_agents(self):
         original_agent = sys.modules.get("agent")

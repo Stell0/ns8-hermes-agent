@@ -91,9 +91,11 @@ def build_agent_public_env(agent_data, shared_environment):
 def build_agent_secrets(existing_agent_secrets, shared_secrets, shared_environment):
     # Preserve each agent secret across regenerations while still projecting the
     # current module-wide SMTP and LDAP bind credentials into the private file.
+    api_server_key = existing_agent_secrets.get(API_SERVER_KEY) or generate_secret()
     env_data = {
         AGENT_SECRET_KEY: existing_agent_secrets.get(AGENT_SECRET_KEY) or generate_secret(),
-        API_SERVER_KEY: existing_agent_secrets.get(API_SERVER_KEY) or generate_secret(),
+        API_SERVER_KEY: api_server_key,
+        "OPENAI_API_KEY": api_server_key,
     }
 
     smtp_password = shared_secrets.get(SMTP_SECRET_KEY)
