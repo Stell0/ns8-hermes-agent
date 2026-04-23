@@ -24,7 +24,7 @@ SESSION_TTL_SECONDS = 8 * 60 * 60
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
 TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)(?:/(dashboard|chat)(?:/.*)?|/?)$")
-AUTHENTICATED_USER_HEADER="X-Herm...User"
+AUTHENTICATED_USER_HEADER = "X-Hermes-Authenticated-User"
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
