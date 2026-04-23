@@ -1,7 +1,7 @@
 [Unit]
-Description=Hermes gateway %i
-Requires=hermes-pod@%i.service
-After=hermes-pod@%i.service
+Description=Open WebUI sidecar %i
+Requires=hermes-pod@%i.service hermes@%i.service
+After=hermes-pod@%i.service hermes@%i.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
@@ -14,9 +14,9 @@ Type=notify
 NotifyAccess=all
 ExecStartPre=/usr/local/bin/runagent discover-smarthost
 ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id %i
-ExecStartPre=-/usr/bin/podman rm --force hermes-%i
+ExecStartPre=-/usr/bin/podman rm --force openwebui-%i
 ExecStart=runagent /usr/bin/podman run \
-		--name hermes-%i \
+		--name openwebui-%i \
 		--replace \
 		--rm \
 		--sdnotify=conmon \
@@ -24,15 +24,15 @@ ExecStart=runagent /usr/bin/podman run \
 		--pod hermes-pod-%i \
 		--env-file %S/state/agent_%i.env \
 		--env-file %S/state/agent_%i_secrets.env \
-		--env API_SERVER_ENABLED=true \
-		--env API_SERVER_HOST=127.0.0.1 \
-		--env API_SERVER_PORT=8642 \
-		--volume hermes-agent-%i-home:/opt/data:z \
+		--env PORT=8080 \
+		--env WEBUI_AUTH=false \
+		--env ENABLE_OPENAI_API=true \
+		--env OPENAI_API_BASE_URL=http://127.0.0.1:8642/v1 \
+		--env OPENAI_API_KEY=${API_SERVER_KEY} \
 		--tz=${TIMEZONE} \
-		${HERMES_AGENT_HERMES_IMAGE} \
-		hermes gateway run
-ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-%i
-ExecStopPost=-/usr/bin/podman rm --force hermes-%i
+		${HERMES_AGENT_OPENWEBUI_IMAGE}
+ExecStop=/usr/bin/podman stop --ignore --time 10 openwebui-%i
+ExecStopPost=-/usr/bin/podman rm --force openwebui-%i
 TimeoutStopSec=70
 
 [Install]

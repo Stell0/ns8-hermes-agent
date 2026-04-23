@@ -23,8 +23,8 @@ SESSION_COOKIE = "hermes_dashboard_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
-TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)/?$")
-AUTHENTICATED_USER_HEADER = "X-Hermes-Authenticated-User"
+TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)(?:/(dashboard|chat)(?:/.*)?|/?)$")
+AUTHENTICATED_USER_HEADER="X-Herm...User"
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -45,7 +45,8 @@ class AgentRecord:
     allowed_user: str
     status: str
     upstream_url: str = ""
-    upstream_socket: str = ""
+    dashboard_upstream_socket: str = ""
+    chat_upstream_socket: str = ""
 
     @property
     def display_name(self):
@@ -57,9 +58,13 @@ class AgentRecord:
             return self.upstream_url.rstrip("/")
         return f"http://agent-{self.agent_id}"
 
-    @property
-    def has_upstream(self):
-        return bool(self.upstream_url or self.upstream_socket)
+    def upstream_socket_for(self, app_name):
+        if app_name == "chat":
+            return self.chat_upstream_socket
+        return self.dashboard_upstream_socket
+
+    def has_upstream_for(self, app_name):
+        return bool(self.upstream_url or self.upstream_socket_for(app_name))
 
 
 @dataclass(frozen=True)
@@ -122,14 +127,19 @@ def load_agent_registry(path):
                 allowed_user=str(raw_agent["allowed_user"]).strip(),
                 status=str(raw_agent.get("status") or "").strip().lower(),
                 upstream_url=str(raw_agent.get("upstream_url") or "").rstrip("/"),
-                upstream_socket=str(raw_agent.get("upstream_socket") or "").strip(),
+                dashboard_upstream_socket=str(
+                    raw_agent.get("dashboard_upstream_socket") or raw_agent.get("upstream_socket") or ""
+                ).strip(),
+                chat_upstream_socket=str(raw_agent.get("chat_upstream_socket") or "").strip(),
             )
         except (KeyError, TypeError, ValueError):
             continue
 
-        if not agent_record.allowed_user or not agent_record.has_upstream:
+        if not agent_record.allowed_user or not agent_record.has_upstream_for("dashboard"):
             continue
-        if agent_record.upstream_socket and not agent_record.upstream_socket.startswith("/"):
+        if agent_record.dashboard_upstream_socket and not agent_record.dashboard_upstream_socket.startswith("/"):
+            continue
+        if agent_record.chat_upstream_socket and not agent_record.chat_upstream_socket.startswith("/"):
             continue
         if agent_record.allowed_user in agents_by_user:
             return {}, {}
@@ -270,11 +280,20 @@ def authenticate_credentials(username, password, config):
         return False
 
 
-def target_agent_id(path):
+def target_route(path):
     match = TARGET_PATH_PATTERN.fullmatch(path or "/")
     if match is None:
         return None
-    return int(match.group(1))
+    agent_id = int(match.group(1))
+    app_name = match.group(2)
+    return agent_id, app_name
+
+
+def target_agent_id(path):
+    route = target_route(path)
+    if route is None:
+        return None
+    return route[0]
 
 
 def normalized_path(path):
@@ -294,7 +313,8 @@ def normalize_next_path(candidate, fallback="/"):
         return fallback
     if value in {LOGIN_PATH, LOGOUT_PATH}:
         return fallback
-    if target_agent_id(value) is not None:
+    route = target_route(value)
+    if route is not None and route[1] is None:
         return fallback
     return value
 
@@ -629,15 +649,30 @@ def response_headers(upstream_response, upstream_base_url):
     return headers
 
 
-def upstream_request_url(agent_record, request):
-    upstream_url = f"{agent_record.upstream_origin}{request.url.path}"
+def upstream_path_for_request(request, app_name):
+    path = request.url.path or "/"
+    if path.startswith("/"):
+        prefix = None
+        if app_name == "dashboard":
+            prefix = f"/hermes-{target_agent_id(path)}/dashboard" if target_route(path) else None
+        elif app_name == "chat":
+            prefix = f"/hermes-{target_agent_id(path)}/chat" if target_route(path) else None
+        if prefix and path.startswith(prefix):
+            stripped = path[len(prefix):]
+            return stripped or "/"
+    return path
+
+
+def upstream_request_url(agent_record, request, app_name):
+    upstream_url = f"{agent_record.upstream_origin}{upstream_path_for_request(request, app_name)}"
     if request.url.query:
         upstream_url = f"{upstream_url}?{request.url.query}"
     return upstream_url
 
 
-def upstream_client_for_agent(request, agent_record):
-    if not agent_record.upstream_socket:
+def upstream_client_for_agent(request, agent_record, app_name):
+    upstream_socket = agent_record.upstream_socket_for(app_name)
+    if not upstream_socket:
         return request.app.state.client
 
     uds_clients = getattr(request.app.state, "uds_clients", None)
@@ -645,21 +680,21 @@ def upstream_client_for_agent(request, agent_record):
         uds_clients = {}
         request.app.state.uds_clients = uds_clients
 
-    client = uds_clients.get(agent_record.upstream_socket)
+    client = uds_clients.get(upstream_socket)
     if client is None:
         client = httpx.AsyncClient(
             timeout=60.0,
             follow_redirects=False,
-            transport=httpx.AsyncHTTPTransport(uds=agent_record.upstream_socket),
+            transport=httpx.AsyncHTTPTransport(uds=upstream_socket),
         )
-        uds_clients[agent_record.upstream_socket] = client
+        uds_clients[upstream_socket] = client
 
     return client
 
 
-async def proxy_to_agent(agent_record, request, authenticated_username=""):
-    upstream_url = upstream_request_url(agent_record, request)
-    upstream_client = upstream_client_for_agent(request, agent_record)
+async def proxy_to_agent(agent_record, request, authenticated_username="", app_name="dashboard"):
+    upstream_url = upstream_request_url(agent_record, request, app_name)
+    upstream_client = upstream_client_for_agent(request, agent_record, app_name)
 
     log_debug_event(
         "proxy_forward",
@@ -692,6 +727,7 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
 
 
 app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/health")
@@ -715,7 +751,9 @@ async def proxy(path: str, request: Request):
     del path
     config = load_config()
     current_path = request_path(request)
-    explicit_agent = target_agent_id(current_path)
+    explicit_route = target_route(current_path)
+    explicit_agent = explicit_route[0] if explicit_route is not None else None
+    explicit_app = explicit_route[1] if explicit_route is not None else None
 
     log_debug_event(
         "request_received",
@@ -780,7 +818,7 @@ async def proxy(path: str, request: Request):
         )
         return response
 
-    if explicit_agent is not None:
+    if explicit_agent is not None and explicit_app is None:
         if session_data is not None:
             return status_page_response(session_data, current_path)
         return login_form_response(config, request, explicit_agent_id=explicit_agent, next_path="/")
@@ -820,6 +858,7 @@ async def proxy(path: str, request: Request):
         session_data["agent"],
         request,
         authenticated_username=session_data["username"],
+        app_name=explicit_app or "dashboard",
     )
 
 

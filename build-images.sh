@@ -39,6 +39,7 @@ component_images=(
     "${repobase}/hermes-agent-auth:${imagetag}"
     "${repobase}/hermes-agent-hermes:${imagetag}"
     "${repobase}/hermes-agent-socket:${imagetag}"
+    "${repobase}/hermes-agent-openwebui:${imagetag}"
 )
 
 # Create a new empty container image
@@ -60,6 +61,7 @@ buildah run \
 build_component_image "hermes-agent-auth" "containers/auth"
 build_component_image "hermes-agent-hermes" "containers/hermes"
 build_component_image "hermes-agent-socket" "containers/socket"
+build_component_image "hermes-agent-openwebui" "containers/openwebui"
 
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot

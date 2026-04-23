@@ -14,7 +14,7 @@ KillMode=none
 Type=notify
 NotifyAccess=all
 ExecStartPre=/usr/bin/install -d -m 0770 %S/state/dashboard-sockets
-ExecStartPre=-/usr/bin/rm -f %S/state/dashboard-sockets/agent-%i.sock
+ExecStartPre=-/usr/bin/rm -f %S/state/dashboard-sockets/agent-%i-dashboard.sock
 ExecStartPre=-/usr/bin/podman rm --force hermes-socket-%i
 ExecStart=runagent /usr/bin/podman run \
 		--name hermes-socket-%i \
@@ -27,7 +27,7 @@ ExecStart=runagent /usr/bin/podman run \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_SOCKET_IMAGE} \
 		-d -d \
-		UNIX-LISTEN:/sockets/agent-%i.sock,fork,unlink-early,mode=0660 \
+		UNIX-LISTEN:/sockets/agent-%i-dashboard.sock,fork,unlink-early,mode=0660 \
 		TCP-CONNECT:127.0.0.1:9120
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-socket-%i
 ExecStopPost=-/usr/bin/podman rm --force hermes-socket-%i

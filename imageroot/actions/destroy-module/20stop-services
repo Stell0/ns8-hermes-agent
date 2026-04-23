@@ -20,9 +20,13 @@ run(["systemctl", "--user", "disable", "--now", "hermes-auth.service"], check=Fa
 run(["podman", "rm", "--force", "hermes-auth"], check=False)
 
 for agent_id in list_known_agent_ids():
+    run(["systemctl", "--user", "disable", "--now", f"openwebui-socket@{agent_id}.service"], check=False)
+    run(["systemctl", "--user", "disable", "--now", f"openwebui@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "disable", "--now", f"hermes-socket@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "disable", "--now", f"hermes@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "stop", f"hermes-pod@{agent_id}.service"], check=False)
     run(["podman", "pod", "rm", "--force", f"hermes-pod-{agent_id}"], check=False)
+    run(["podman", "rm", "--force", f"openwebui-{agent_id}"], check=False)
+    run(["podman", "rm", "--force", f"openwebui-socket-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-socket-{agent_id}"], check=False)
