@@ -27,6 +27,7 @@ build_component_image() {
         --force-rm \
         --layers \
         --jobs "$(nproc)" \
+        --ulimit nofile=65536:65536 \
         --tag "${repobase}/${image_name}" \
         --tag "${repobase}/${image_name}:${imagetag}" \
         "${context_dir}"
