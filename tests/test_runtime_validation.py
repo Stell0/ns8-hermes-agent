@@ -709,6 +709,11 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertEqual(authproxy.target_route("/hermes-1/dashboard/api/status"), (1, "dashboard"))
         self.assertEqual(authproxy.target_route("/hermes-1"), (1, None))
 
+    def test_authenticated_user_header_uses_canonical_name(self):
+        authproxy = self.load_authproxy()
+
+        self.assertEqual(authproxy.AUTHENTICATED_USER_HEADER, "X-Hermes-Authenticated-User")
+
     def test_proxy_uses_unix_socket_upstream_when_configured(self):
         authproxy = self.load_authproxy()
         config = self.socket_runtime_config(authproxy)
@@ -901,6 +906,124 @@ class HermesAuthProxyTest(unittest.TestCase):
             "http://agent-1/api/chat/completions",
         )
         self.assertEqual(uds_clients[0].calls[0]["kwargs"]["content"], b'{"model":"test"}')
+
+    def test_proxy_rejects_mismatched_explicit_chat_route(self):
+        authproxy = self.load_authproxy()
+        session_agent = authproxy.AgentRecord(
+            agent_id=1,
+            agent_name="Agent One",
+            allowed_user="alice",
+            status="start",
+            dashboard_upstream_socket="/sockets/agent-1-dashboard.sock",
+            chat_upstream_socket="/sockets/agent-1-chat.sock",
+        )
+        other_agent = authproxy.AgentRecord(
+            agent_id=2,
+            agent_name="Agent Two",
+            allowed_user="bob",
+            status="start",
+            dashboard_upstream_socket="/sockets/agent-2-dashboard.sock",
+            chat_upstream_socket="/sockets/agent-2-chat.sock",
+        )
+        config = authproxy.RuntimeConfig(
+            user_domain="example.org",
+            ldap_host="ldap.example.org",
+            ldap_port=389,
+            ldap_base_dn="dc=example,dc=org",
+            ldap_schema="rfc2307",
+            ldap_bind_dn="",
+            ldap_bind_password="",
+            session_secret="test-secret",
+            agents_by_id={1: session_agent, 2: other_agent},
+            agents_by_user={"alice": session_agent, "bob": other_agent},
+        )
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("mismatched agent path should not proxy upstream")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/hermes-2/chat/api/models",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy.LOGGER, "info"
+        ) as log_info:
+            response = asyncio.run(authproxy.proxy("hermes-2/chat/api/models", request))
+
+        self.assertEqual(response.kwargs["status_code"], 404)
+        self.assertEqual(response.args[0], "Requested agent path does not match the active session.")
+        logged_messages = [call.args[0] for call in log_info.call_args_list]
+        self.assertEqual(len(logged_messages), 2)
+        self.assertIn("event=auth_success", logged_messages[0])
+        self.assertIn("event=auth_failed", logged_messages[1])
+        self.assertIn("detail=route_mismatch", logged_messages[1])
+
+    def test_proxy_returns_503_when_chat_socket_is_missing(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(
+            authproxy,
+            agents_by_id={
+                1: authproxy.AgentRecord(
+                    agent_id=1,
+                    agent_name="Agent One",
+                    allowed_user="alice",
+                    status="start",
+                    dashboard_upstream_socket="/sockets/agent-1-dashboard.sock",
+                )
+            },
+            agents_by_user={},
+        )
+        config = authproxy.RuntimeConfig(
+            user_domain=config.user_domain,
+            ldap_host=config.ldap_host,
+            ldap_port=config.ldap_port,
+            ldap_base_dn=config.ldap_base_dn,
+            ldap_schema=config.ldap_schema,
+            ldap_bind_dn=config.ldap_bind_dn,
+            ldap_bind_password=config.ldap_bind_password,
+            session_secret=config.session_secret,
+            agents_by_id=config.agents_by_id,
+            agents_by_user={"alice": config.agents_by_id[1]},
+        )
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("missing chat upstream should not fall back to HTTP proxying")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/hermes-1/chat/api/models",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config):
+            response = asyncio.run(authproxy.proxy("hermes-1/chat/api/models", request))
+
+        self.assertEqual(response.kwargs["status_code"], 503)
+        self.assertEqual(response.args[0], "Assigned chat interface is temporarily unavailable.")
 
     def test_proxy_preserves_dashboard_authorization_and_sets_custom_user_header(self):
         authproxy = self.load_authproxy()

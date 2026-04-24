@@ -578,10 +578,19 @@ def unauthorized_response():
     )
 
 
-def upstream_unavailable_response():
+def route_mismatch_response():
     return PlainTextResponse(
-        "Assigned dashboard is temporarily unavailable.",
-        status_code=502,
+        "Requested agent path does not match the active session.",
+        status_code=404,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def upstream_unavailable_response(app_name="dashboard"):
+    target_name = "chat interface" if app_name == "chat" else "dashboard"
+    return PlainTextResponse(
+        f"Assigned {target_name} is temporarily unavailable.",
+        status_code=503 if app_name == "chat" else 502,
         headers={"Cache-Control": "no-store"},
     )
 
@@ -693,6 +702,9 @@ def upstream_client_for_agent(request, agent_record, app_name):
 
 
 async def proxy_to_agent(agent_record, request, authenticated_username="", app_name="dashboard"):
+    if not agent_record.has_upstream_for(app_name):
+        return upstream_unavailable_response(app_name)
+
     upstream_url = upstream_request_url(agent_record, request, app_name)
     upstream_client = upstream_client_for_agent(request, agent_record, app_name)
 
@@ -853,6 +865,17 @@ async def proxy(path: str, request: Request):
         username=session_data["username"],
         auth_method="session",
     )
+    if explicit_agent is not None and explicit_app is not None and explicit_agent != session_data["agent"].agent_id:
+        log_auth_event(
+            "auth_failed",
+            request,
+            agent_id=str(explicit_agent),
+            username=session_data["username"],
+            auth_method="session",
+            detail="route_mismatch",
+        )
+        return route_mismatch_response()
+
     return await proxy_to_agent(
         session_data["agent"],
         request,
