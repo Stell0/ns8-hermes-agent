@@ -24,9 +24,12 @@ SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes@.servi
 AUTH_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-auth.service"
 POD_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-pod@.service"
 SOCKET_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-socket@.service"
+OPENWEBUI_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "openwebui@.service"
+OPENWEBUI_SOCKET_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "openwebui-socket@.service"
 AUTH_CONTAINERFILE_PATH = ROOT / "containers" / "auth" / "Containerfile"
 HERMES_CONTAINERFILE_PATH = ROOT / "containers" / "hermes" / "Containerfile"
 SOCKET_CONTAINERFILE_PATH = ROOT / "containers" / "socket" / "Containerfile"
+OPENWEBUI_CONTAINERFILE_PATH = ROOT / "containers" / "openwebui" / "Containerfile"
 HERMES_ENTRYPOINT_PATH = ROOT / "containers" / "hermes" / "entrypoint.sh"
 HERMES_DASHBOARD_PATCH_PATH = ROOT / "containers" / "hermes" / "patch_dashboard_source.py"
 BUILD_IMAGES_PATH = ROOT / "build-images.sh"
@@ -460,7 +463,8 @@ class HermesAuthProxyTest(unittest.TestCase):
             agent_name="Agent One",
             allowed_user="alice",
             status="start",
-            upstream_socket="/sockets/agent-1.sock",
+            dashboard_upstream_socket="/sockets/agent-1-dashboard.sock",
+            chat_upstream_socket="/sockets/agent-1-chat.sock",
         )
         values = {
             "user_domain": "example.org",
@@ -684,7 +688,8 @@ class HermesAuthProxyTest(unittest.TestCase):
                                 "name": "Agent One",
                                 "allowed_user": "alice",
                                 "status": "start",
-                                "upstream_socket": "/sockets/agent-1.sock",
+                                "dashboard_upstream_socket": "/sockets/agent-1-dashboard.sock",
+                                "chat_upstream_socket": "/sockets/agent-1-chat.sock",
                             }
                         ]
                     }
@@ -694,9 +699,24 @@ class HermesAuthProxyTest(unittest.TestCase):
 
             agents_by_id, agents_by_user = authproxy.load_agent_registry(str(registry_path))
 
-        self.assertEqual(agents_by_id[1].upstream_socket, "/sockets/agent-1.sock")
+        self.assertEqual(agents_by_id[1].dashboard_upstream_socket, "/sockets/agent-1-dashboard.sock")
+        self.assertEqual(agents_by_id[1].chat_upstream_socket, "/sockets/agent-1-chat.sock")
         self.assertEqual(agents_by_id[1].upstream_origin, "http://agent-1")
         self.assertEqual(agents_by_user["alice"].agent_id, 1)
+
+    def test_target_route_parses_dashboard_and_chat_paths(self):
+        authproxy = self.load_authproxy()
+
+        self.assertEqual(authproxy.target_route("/hermes-1/dashboard"), (1, "dashboard"))
+        self.assertEqual(authproxy.target_route("/hermes-1/chat"), (1, "chat"))
+        self.assertEqual(authproxy.target_route("/hermes-1/chat/api/models"), (1, "chat"))
+        self.assertEqual(authproxy.target_route("/hermes-1/dashboard/api/status"), (1, "dashboard"))
+        self.assertEqual(authproxy.target_route("/hermes-1"), (1, None))
+
+    def test_authenticated_user_header_uses_canonical_name(self):
+        authproxy = self.load_authproxy()
+
+        self.assertEqual(authproxy.AUTHENTICATED_USER_HEADER, "X-Hermes-Authenticated-User")
 
     def test_proxy_uses_unix_socket_upstream_when_configured(self):
         authproxy = self.load_authproxy()
@@ -758,9 +778,256 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         self.assertEqual(response.kwargs["status_code"], 200)
         self.assertEqual(len(uds_clients), 1)
-        self.assertEqual(uds_clients[0].kwargs["transport"].uds, "/sockets/agent-1.sock")
+        self.assertEqual(uds_clients[0].kwargs["transport"].uds, "/sockets/agent-1-dashboard.sock")
         self.assertEqual(uds_clients[0].calls[0]["kwargs"]["url"], "http://agent-1/api/status?verbose=1")
         self.assertEqual(response.kwargs["headers"]["location"], "/settings")
+
+    def test_proxy_routes_chat_paths_to_chat_socket_and_strips_prefix(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+
+        class FakeUpstreamResponse:
+            def __init__(self):
+                self.content = b"ok"
+                self.status_code = 200
+                self.headers = {}
+
+        class FakeUdsClient:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+                self.calls = []
+
+            async def request(self, *args, **kwargs):
+                self.calls.append({"args": args, "kwargs": kwargs})
+                return FakeUpstreamResponse()
+
+            async def aclose(self):
+                return None
+
+        uds_clients = []
+
+        def build_fake_client(*args, **kwargs):
+            client = FakeUdsClient(*args, **kwargs)
+            uds_clients.append(client)
+            return client
+
+        request = self.make_request(
+            types.SimpleNamespace(),
+            headers={"x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/hermes-1/chat/api/models",
+            query="provider=local",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy.httpx,
+            "AsyncClient",
+            side_effect=build_fake_client,
+        ), mock.patch.object(
+            authproxy.httpx,
+            "AsyncHTTPTransport",
+            side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+        ):
+            response = asyncio.run(authproxy.proxy("hermes-1/chat/api/models", request))
+
+        self.assertEqual(response.kwargs["status_code"], 200)
+        self.assertEqual(len(uds_clients), 1)
+        self.assertEqual(uds_clients[0].kwargs["transport"].uds, "/sockets/agent-1-chat.sock")
+        self.assertEqual(uds_clients[0].calls[0]["kwargs"]["url"], "http://agent-1/api/models?provider=local")
+
+    def test_proxy_routes_chat_post_requests_without_treating_them_as_login_forms(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+
+        class FakeUpstreamResponse:
+            def __init__(self):
+                self.content = b'{"ok":true}'
+                self.status_code = 200
+                self.headers = {"content-type": "application/json"}
+
+        class FakeUdsClient:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+                self.calls = []
+
+            async def request(self, *args, **kwargs):
+                self.calls.append({"args": args, "kwargs": kwargs})
+                return FakeUpstreamResponse()
+
+            async def aclose(self):
+                return None
+
+        uds_clients = []
+
+        def build_fake_client(*args, **kwargs):
+            client = FakeUdsClient(*args, **kwargs)
+            uds_clients.append(client)
+            return client
+
+        request = self.make_request(
+            types.SimpleNamespace(),
+            headers={"content-type": "application/json", "x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/hermes-1/chat/api/chat/completions",
+            method="POST",
+            body=b'{"model":"test"}',
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy.httpx,
+            "AsyncClient",
+            side_effect=build_fake_client,
+        ), mock.patch.object(
+            authproxy.httpx,
+            "AsyncHTTPTransport",
+            side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+        ):
+            response = asyncio.run(authproxy.proxy("hermes-1/chat/api/chat/completions", request))
+
+        self.assertEqual(response.kwargs["status_code"], 200)
+        self.assertEqual(len(uds_clients), 1)
+        self.assertEqual(uds_clients[0].kwargs["transport"].uds, "/sockets/agent-1-chat.sock")
+        self.assertEqual(
+            uds_clients[0].calls[0]["kwargs"]["url"],
+            "http://agent-1/api/chat/completions",
+        )
+        self.assertEqual(uds_clients[0].calls[0]["kwargs"]["content"], b'{"model":"test"}')
+
+    def test_proxy_rejects_mismatched_explicit_chat_route(self):
+        authproxy = self.load_authproxy()
+        session_agent = authproxy.AgentRecord(
+            agent_id=1,
+            agent_name="Agent One",
+            allowed_user="alice",
+            status="start",
+            dashboard_upstream_socket="/sockets/agent-1-dashboard.sock",
+            chat_upstream_socket="/sockets/agent-1-chat.sock",
+        )
+        other_agent = authproxy.AgentRecord(
+            agent_id=2,
+            agent_name="Agent Two",
+            allowed_user="bob",
+            status="start",
+            dashboard_upstream_socket="/sockets/agent-2-dashboard.sock",
+            chat_upstream_socket="/sockets/agent-2-chat.sock",
+        )
+        config = authproxy.RuntimeConfig(
+            user_domain="example.org",
+            ldap_host="ldap.example.org",
+            ldap_port=389,
+            ldap_base_dn="dc=example,dc=org",
+            ldap_schema="rfc2307",
+            ldap_bind_dn="",
+            ldap_bind_password="",
+            session_secret="test-secret",
+            agents_by_id={1: session_agent, 2: other_agent},
+            agents_by_user={"alice": session_agent, "bob": other_agent},
+        )
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("mismatched agent path should not proxy upstream")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/hermes-2/chat/api/models",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy.LOGGER, "info"
+        ) as log_info:
+            response = asyncio.run(authproxy.proxy("hermes-2/chat/api/models", request))
+
+        self.assertEqual(response.kwargs["status_code"], 404)
+        self.assertEqual(response.args[0], "Requested agent path does not match the active session.")
+        logged_messages = [call.args[0] for call in log_info.call_args_list]
+        self.assertEqual(len(logged_messages), 2)
+        self.assertIn("event=auth_success", logged_messages[0])
+        self.assertIn("event=auth_failed", logged_messages[1])
+        self.assertIn("detail=route_mismatch", logged_messages[1])
+
+    def test_proxy_returns_503_when_chat_socket_is_missing(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(
+            authproxy,
+            agents_by_id={
+                1: authproxy.AgentRecord(
+                    agent_id=1,
+                    agent_name="Agent One",
+                    allowed_user="alice",
+                    status="start",
+                    dashboard_upstream_socket="/sockets/agent-1-dashboard.sock",
+                )
+            },
+            agents_by_user={},
+        )
+        config = authproxy.RuntimeConfig(
+            user_domain=config.user_domain,
+            ldap_host=config.ldap_host,
+            ldap_port=config.ldap_port,
+            ldap_base_dn=config.ldap_base_dn,
+            ldap_schema=config.ldap_schema,
+            ldap_bind_dn=config.ldap_bind_dn,
+            ldap_bind_password=config.ldap_bind_password,
+            session_secret=config.session_secret,
+            agents_by_id=config.agents_by_id,
+            agents_by_user={"alice": config.agents_by_id[1]},
+        )
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("missing chat upstream should not fall back to HTTP proxying")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/hermes-1/chat/api/models",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config):
+            response = asyncio.run(authproxy.proxy("hermes-1/chat/api/models", request))
+
+        self.assertEqual(response.kwargs["status_code"], 503)
+        self.assertEqual(response.args[0], "Assigned chat interface is temporarily unavailable.")
 
     def test_proxy_preserves_dashboard_authorization_and_sets_custom_user_header(self):
         authproxy = self.load_authproxy()
@@ -1001,6 +1268,8 @@ class HermesModuleStateTest(unittest.TestCase):
         auth_template = AUTH_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
         pod_template = POD_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
         socket_template = SOCKET_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
+        openwebui_template = OPENWEBUI_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
+        openwebui_socket_template = OPENWEBUI_SOCKET_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
 
         self.assertIn("Restart=always", service_template)
         self.assertNotIn("Restart=on-failure", service_template)
@@ -1016,6 +1285,7 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("ensure-agent-home-ownership --agent-id %i", service_template)
         self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
         self.assertIn("API_SERVER_ENABLED=true", service_template)
+        self.assertIn("API_SERVER_PORT=8642", service_template)
         self.assertIn("gateway run", service_template)
         self.assertNotIn("seed-agent-home", service_template)
 
@@ -1027,8 +1297,8 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("EnvironmentFile=-%S/state/authproxy.env", auth_template)
         self.assertIn("--env-file %S/state/authproxy.env", auth_template)
         self.assertIn("--env-file %S/state/authproxy_secrets.env", auth_template)
-        self.assertIn("AUTH_PROXY_AGENT_REGISTRY=/app/authproxy_agents.json", auth_template)
-        self.assertIn("AUTH_PROXY_PORT=9119", auth_template)
+        self.assertIn("AUTH_PROXY_AGENT_REGISTRY", auth_template)
+        self.assertIn("AUTH_PROXY_PORT", auth_template)
         self.assertIn("--volume %S/state/dashboard-sockets:/sockets:z", auth_template)
         self.assertIn("${HERMES_AGENT_AUTH_IMAGE}", auth_template)
         self.assertIn("python /app/authproxy.py", auth_template)
@@ -1050,9 +1320,26 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("--pod hermes-pod-%i", socket_template)
         self.assertIn("--volume %S/state/dashboard-sockets:/sockets:z", socket_template)
         self.assertIn("${HERMES_AGENT_SOCKET_IMAGE}", socket_template)
-        self.assertIn("UNIX-LISTEN:/sockets/agent-%i.sock,fork,unlink-early,mode=0660", socket_template)
+        self.assertIn("UNIX-LISTEN:/sockets/agent-%i-dashboard.sock,fork,unlink-early,mode=0660", socket_template)
         self.assertIn("TCP-CONNECT:127.0.0.1:9120", socket_template)
         self.assertNotIn("ExecStartPost=/bin/sh -c", socket_template)
+
+        self.assertIn("Description=Open WebUI sidecar %i", openwebui_template)
+        self.assertIn("Requires=hermes-pod@%i.service", openwebui_template)
+        self.assertIn("--name openwebui-%i", openwebui_template)
+        self.assertIn("--pod hermes-pod-%i", openwebui_template)
+        self.assertIn("--env-file %S/state/agent_%i.env", openwebui_template)
+        self.assertIn("--env-file %S/state/agent_%i_secrets.env", openwebui_template)
+        self.assertIn("OPENAI_API_BASE_URL=http://127.0.0.1:8642/v1", openwebui_template)
+        self.assertIn("WEBUI_AUTH=false", openwebui_template)
+
+        self.assertIn("Description=Open WebUI unix socket sidecar %i", openwebui_socket_template)
+        self.assertIn("Requires=hermes-pod@%i.service openwebui@%i.service", openwebui_socket_template)
+        self.assertIn("PartOf=openwebui@%i.service", openwebui_socket_template)
+        self.assertIn("--name openwebui-socket-%i", openwebui_socket_template)
+        self.assertIn("UNIX-LISTEN:/sockets/agent-%i-chat.sock,fork,unlink-early,mode=0660", openwebui_socket_template)
+        self.assertIn("TCP-CONNECT:127.0.0.1:8080", openwebui_socket_template)
+
 
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
@@ -1079,11 +1366,19 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("apk add --no-cache socat", containerfile)
         self.assertIn('ENTRYPOINT ["/usr/bin/socat"]', containerfile)
 
+    def test_openwebui_containerfile_uses_open_webui_base_image(self):
+        containerfile = OPENWEBUI_CONTAINERFILE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("FROM ghcr.io/open-webui/open-webui:", containerfile)
+        self.assertIn('org.opencontainers.image.title="hermes-agent-openwebui"', containerfile)
+
     def test_build_images_script_publishes_socket_image_and_one_tcp_port(self):
         build_script = BUILD_IMAGES_PATH.read_text(encoding="utf-8")
 
         self.assertIn('"${repobase}/hermes-agent-socket:${imagetag}"', build_script)
+        self.assertIn('"${repobase}/hermes-agent-openwebui:${imagetag}"', build_script)
         self.assertIn('build_component_image "hermes-agent-socket" "containers/socket"', build_script)
+        self.assertIn('build_component_image "hermes-agent-openwebui" "containers/openwebui"', build_script)
         self.assertIn('--label="org.nethserver.tcp-ports-demand=1"', build_script)
 
     def test_hermes_entrypoint_keeps_absolute_virtualenv_activation(self):
@@ -1237,11 +1532,12 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             self.assertEqual(agent_secrets["LDAP_BIND_DN"], "cn=ldapservice,dc=example,dc=org")
             self.assertEqual(agent_secrets["LDAP_BIND_PASSWORD"], "ldap-secret")
+            self.assertTrue(agent_secrets["API_SERVER_KEY"])
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
             self.assertEqual(
                 set(agent_secrets),
-                {"HERMES_AGENT_SECRET", "LDAP_BIND_DN", "LDAP_BIND_PASSWORD", "SMTP_PASSWORD"},
+                {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "LDAP_BIND_DN", "LDAP_BIND_PASSWORD", "OPENAI_API_KEY", "SMTP_PASSWORD"},
             )
             self.assertEqual(authproxy_env["USER_DOMAIN"], "example.org")
             self.assertEqual(authproxy_env["LDAP_HOST"], "10.0.2.2")
@@ -1256,7 +1552,8 @@ class HermesModuleStateTest(unittest.TestCase):
                             "name": "Alice User",
                             "allowed_user": "alice",
                             "status": "start",
-                            "upstream_socket": "/sockets/agent-1.sock",
+                            "dashboard_upstream_socket": "/sockets/agent-1-dashboard.sock",
+                            "chat_upstream_socket": "/sockets/agent-1-chat.sock",
                         }
                     ]
                 },
@@ -1308,6 +1605,7 @@ class HermesModuleStateTest(unittest.TestCase):
 
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
+            self.assertTrue(agent_secrets["API_SERVER_KEY"])
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
             self.assertTrue(read_envfile(Path("authproxy_secrets.env"))["HERMES_AUTH_SESSION_SECRET"])
 
@@ -1348,8 +1646,9 @@ class HermesModuleStateTest(unittest.TestCase):
 
             agent_secrets = read_envfile(Path("agent_3_secrets.env"))
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], first_sync_secrets["HERMES_AGENT_SECRET"])
+            self.assertEqual(agent_secrets["API_SERVER_KEY"], first_sync_secrets["API_SERVER_KEY"])
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "OPENAI_API_KEY", "SMTP_PASSWORD"})
 
     def test_seed_agent_home_action_uses_public_envfile_and_templates_mount(self):
         with mock.patch("sys.stdin", io.StringIO("{}")):
@@ -1866,7 +2165,7 @@ class HermesModuleStateTest(unittest.TestCase):
             agent_secrets = read_envfile(Path("agent_3_secrets.env"))
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], "preserved")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "OPENAI_API_KEY", "SMTP_PASSWORD"})
 
     def test_configure_module_reconciles_removed_and_started_agents(self):
         original_agent = sys.modules.get("agent")
@@ -1922,6 +2221,11 @@ class HermesModuleStateTest(unittest.TestCase):
                         "MODULE_ID": "hermes-agent1",
                         "TIMEZONE": "UTC",
                         "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
+                        self.state.BASE_VIRTUALHOST_ENV: "",
+                        self.state.BASE_VIRTUALHOST_PREVIOUS_ENV: "",
+                        self.state.LETS_ENCRYPT_ENV: "",
+                        self.state.LETS_ENCRYPT_PREVIOUS_ENV: "",
+                        self.state.USER_DOMAIN_ENV: "",
                     },
                     clear=False,
                 ), mock.patch("subprocess.run", side_effect=run_side_effect) as run_command:
@@ -1944,19 +2248,23 @@ class HermesModuleStateTest(unittest.TestCase):
                 agent_stub.bind_user_domains.assert_called_once_with([])
                 command_list = [call.args[0] for call in run_command.call_args_list]
                 self.assertEqual(
-                    command_list[:6],
+                    command_list[:8],
                     [
+                        ["systemctl", "--user", "disable", "--now", "openwebui-socket@2.service"],
+                        ["systemctl", "--user", "disable", "--now", "openwebui@2.service"],
                         ["systemctl", "--user", "disable", "--now", "hermes-socket@2.service"],
                         ["systemctl", "--user", "disable", "--now", "hermes@2.service"],
                         ["systemctl", "--user", "stop", "hermes-pod@2.service"],
                         ["podman", "pod", "rm", "--force", "hermes-pod-2"],
-                        ["podman", "rm", "--force", "hermes-2"],
-                        ["podman", "rm", "--force", "hermes-socket-2"],
+                        ["podman", "rm", "--force", "openwebui-2"],
+                        ["podman", "rm", "--force", "openwebui-socket-2"],
                     ],
                 )
                 self.assertEqual(
-                    command_list[6:9],
+                    command_list[8:13],
                     [
+                        ["podman", "rm", "--force", "hermes-2"],
+                        ["podman", "rm", "--force", "hermes-socket-2"],
                         ["runagent", "remove-agent-state", "--agent-id", "2"],
                         ["podman", "volume", "exists", "hermes-agent-2-home"],
                         ["podman", "volume", "rm", "--force", "hermes-agent-2-home"],
@@ -1966,11 +2274,17 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.assertIn(["runagent", "sync-agent-runtime"], command_list)
                 self.assertIn(["systemctl", "--user", "daemon-reload"], command_list)
                 self.assertIn(["systemctl", "--user", "enable", "hermes@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "enable", "openwebui@1.service"], command_list)
                 self.assertIn(["systemctl", "--user", "enable", "hermes-socket@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "enable", "openwebui-socket@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "stop", "openwebui-socket@1.service"], command_list)
                 self.assertIn(["systemctl", "--user", "stop", "hermes-socket@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "stop", "openwebui@1.service"], command_list)
                 self.assertIn(["systemctl", "--user", "stop", "hermes@1.service"], command_list)
-                self.assertIn(["systemctl", "--user", "start", "hermes-socket@1.service"], command_list)
                 self.assertIn(["systemctl", "--user", "start", "hermes@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "start", "openwebui@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "start", "hermes-socket@1.service"], command_list)
+                self.assertIn(["systemctl", "--user", "start", "openwebui-socket@1.service"], command_list)
                 self.assertIn(["systemctl", "--user", "disable", "--now", "hermes-auth.service"], command_list)
                 self.assertIn(["podman", "rm", "--force", "hermes-auth"], command_list)
                 seed_commands = [command for command in command_list if command[:2] == ["podman", "run"]]
@@ -2139,6 +2453,11 @@ class HermesModuleStateTest(unittest.TestCase):
                         "MODULE_ID": "hermes-agent1",
                         "TIMEZONE": "UTC",
                         "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
+                        self.state.BASE_VIRTUALHOST_ENV: "",
+                        self.state.BASE_VIRTUALHOST_PREVIOUS_ENV: "",
+                        self.state.LETS_ENCRYPT_ENV: "",
+                        self.state.LETS_ENCRYPT_PREVIOUS_ENV: "",
+                        self.state.USER_DOMAIN_ENV: "",
                     },
                     clear=False,
                 ), mock.patch(
@@ -2149,7 +2468,7 @@ class HermesModuleStateTest(unittest.TestCase):
                 ):
                     run_action(CONFIGURE_MODULE_ACTION_DIR, request)
 
-                agent_stub.resolve_agent_id.assert_called_once_with("traefik@node")
+                agent_stub.resolve_agent_id.assert_not_called()
                 agent_stub.bind_user_domains.assert_called_once_with([])
                 agent_tasks_stub.run.assert_not_called()
         finally:
@@ -2305,6 +2624,14 @@ class HermesModuleStateTest(unittest.TestCase):
                         ),
                         mock.call(["podman", "rm", "--force", "hermes-auth"], check=False),
                         mock.call(
+                            ["systemctl", "--user", "disable", "--now", "openwebui-socket@4.service"],
+                            check=False,
+                        ),
+                        mock.call(
+                            ["systemctl", "--user", "disable", "--now", "openwebui@4.service"],
+                            check=False,
+                        ),
+                        mock.call(
                             ["systemctl", "--user", "disable", "--now", "hermes-socket@4.service"],
                             check=False,
                         ),
@@ -2317,6 +2644,8 @@ class HermesModuleStateTest(unittest.TestCase):
                             check=False,
                         ),
                         mock.call(["podman", "pod", "rm", "--force", "hermes-pod-4"], check=False),
+                        mock.call(["podman", "rm", "--force", "openwebui-4"], check=False),
+                        mock.call(["podman", "rm", "--force", "openwebui-socket-4"], check=False),
                         mock.call(["podman", "rm", "--force", "hermes-4"], check=False),
                         mock.call(["podman", "rm", "--force", "hermes-socket-4"], check=False),
                         mock.call(["runagent", "remove-agent-state", "--agent-id", "4"], check=True),

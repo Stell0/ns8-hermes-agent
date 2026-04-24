@@ -22,9 +22,16 @@ From the UI, configure:
 * select a user domain from the dropdown, which binds the module to that domain and populates the `allowed_user` selectors for each agent
 * one or more agents with unique `allowed_user` values from the selected user domain
 
-Configuration will create the agents and publish the dashboard at `https://hermes.example.com/` with per-agent authentication and routing.
+Configuration will create the agents and publish one shared authenticated entrypoint at `https://hermes.example.com/`.
 
-From dashboard, you can setup a Telegram and everything else, but Dashboard is still early and setting it up from command line is a lot easier.
+Published paths are now per-agent and app-specific:
+
+- `https://hermes.example.com/hermes-<id>/dashboard` → Hermes dashboard
+- `https://hermes.example.com/hermes-<id>/chat` → Open WebUI wired to that agent's local Hermes API server
+
+Open WebUI runs without its own external login prompt; the shared auth proxy authenticates the NS8 user and then proxies the request to either the dashboard or chat socket.
+
+From the dashboard, you can set up Telegram and everything else, but the dashboard is still early and first-time setup from the command line is usually easier.
 
 **Notes**:
 
@@ -75,7 +82,7 @@ runagent -m hermes-agent1 podman exec -it hermes-2 hermes gateway setup
 The current implementation is intentionally small:
 
 - One dedicated Podman pod per configured agent.
-- One configured agent maps directly to one metadata file, one generated Hermes env file, one generated Hermes secrets env file, one Podman-managed Hermes home volume, one primary `hermes@<id>.service`, one per-agent pod owner unit, one rootless Podman pod, and one rootless Hermes container that runs the dashboard and gateway together.
+- One configured agent maps directly to one metadata file, one generated Hermes env file, one generated Hermes secrets env file, one Podman-managed Hermes home volume, one primary `hermes@<id>.service`, one `openwebui@<id>.service`, one per-agent pod owner unit, one rootless Podman pod, one rootless Hermes container that runs the gateway, one rootless Open WebUI container, and two rootless socket relay sidecars for dashboard and chat.
 - A fresh install is idle until at least one agent is configured with `status: start`.
 - `SOUL.md` and the default Hermes home `.env` are seeded exactly once per agent volume during `configure-module` by a one-shot Hermes container that mounts the checked-in templates plus the generated public agent env file.
 - The module supports at most 30 agents and reserves one TCP port for the shared auth listener.
@@ -84,7 +91,7 @@ The current implementation is intentionally small:
 ## Current behavior
 
 - `create-module` seeds minimal module state in `environment`, `secrets.env`, and `agents/`, records `TIMEZONE`, and discovers smarthost settings.
-- `configure-module` validates the submitted agent list plus the shared dashboard virtualhost, optional shared `user_domain`, and optional `lets_encrypt` switch, binds the selected NS8 user domain when set, stores one metadata file per agent, generates per-agent runtime files plus shared auth runtime files, seeds first-time agent home content, reconciles the shared Traefik route, and enables or disables the corresponding `hermes@<id>.service` instances plus the shared `hermes-auth.service` when publishing is active.
+- `configure-module` validates the submitted agent list plus the shared dashboard virtualhost, optional shared `user_domain`, and optional `lets_encrypt` switch, binds the selected NS8 user domain when set, stores one metadata file per agent, generates per-agent runtime files plus shared auth runtime files, generates and persists one per-agent `API_SERVER_KEY`, seeds first-time agent home content, reconciles the shared Traefik route, and enables or disables the corresponding `hermes@<id>.service`, `openwebui@<id>.service`, socket sidecars, plus the shared `hermes-auth.service` when publishing is active.
 - `get-configuration` returns the shared `base_virtualhost`, the shared `user_domain`, the shared `lets_encrypt` setting, and the configured agents with their persisted desired `status` plus `allowed_user`.
 - `get-agent-runtime` returns live per-agent `runtime_status` derived from the current systemd service state.
 - `destroy-module` stops agent services, removes agent pods and containers, stops the shared auth service, deletes the managed Traefik route, and deletes generated per-agent files plus per-agent Hermes home volumes.
@@ -113,12 +120,12 @@ Per-agent Podman volume:
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md`, `.env`, and `config.yaml`, plus the runtime directory skeleton used by Hermes
 - ownership is repaired with the Hermes image's own `hermes` UID/GID during updates, so image UID changes do not leave the volume unwritable before the enabled Hermes, socket, and shared auth services are restarted to pick up refreshed images
 
-Operator-visible runtime names are `hermes-pod-<id>` for the pod, `hermes-<id>` for the per-agent Hermes container, `hermes-socket-<id>` for the per-agent socket relay container, `hermes-auth` for the shared auth proxy container, `hermes@.service` for the per-agent primary systemd unit, `hermes-socket@.service` for the per-agent socket sidecar unit, and `hermes-auth.service` for the shared auth unit. The active Traefik route instance is `<module_id>-hermes-auth`, and the Hermes home volume name is `hermes-agent-<id>-home`.
+Operator-visible runtime names are `hermes-pod-<id>` for the pod, `hermes-<id>` for the per-agent Hermes container, `openwebui-<id>` for the per-agent Open WebUI container, `hermes-socket-<id>` for the dashboard relay container, `openwebui-socket-<id>` for the chat relay container, `hermes-auth` for the shared auth proxy container, `hermes@.service` for the per-agent primary Hermes systemd unit, `openwebui@.service` for the per-agent Open WebUI unit, `hermes-socket@.service` for the dashboard socket sidecar unit, `openwebui-socket@.service` for the chat socket sidecar unit, and `hermes-auth.service` for the shared auth unit. The active Traefik route instance is `<module_id>-hermes-auth`, and the Hermes home volume name is `hermes-agent-<id>-home`.
 
 ## Repository layout
 
 - `imageroot/`: NS8 actions, helper scripts, templates, event handler, state helper module, and the user systemd units.
-- `containers/`: the Hermes wrapper image sources, the dashboard auth proxy image, and the dashboard socket relay image.
+- `containers/`: the Hermes wrapper image sources, the Open WebUI sidecar image, the dashboard auth proxy image, and the dashboard/chat socket relay image.
 - `ui/`: embedded Vue 2 admin UI.
 - `tests/`: Robot Framework integration checks and focused Python unit tests.
 

@@ -34,6 +34,7 @@ AGENT_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)\.env$")
 AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_secrets\.env$")
 AGENT_SECRET_KEY = "HERMES_AGENT_SECRET"
 AUTH_SESSION_SECRET_KEY = "HERMES_AUTH_SESSION_SECRET"
+API_SERVER_KEY = "API_SERVER_KEY"
 SMTP_PUBLIC_KEYS = (
     "SMTP_ENABLED",
     "SMTP_HOST",
@@ -153,16 +154,28 @@ def shared_route_instance_name(module_id=None, shared_environment=None):
     return f"{module_value}-hermes-auth"
 
 
-def agent_dashboard_socket_name(agent_id):
+def validate_agent_id(agent_id):
     if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
         raise ValueError(f"agent id must be between 1 and {MAX_AGENTS}")
 
-    return f"agent-{agent_id}.sock"
+
+
+def agent_dashboard_socket_name(agent_id):
+    validate_agent_id(agent_id)
+    return f"agent-{agent_id}-dashboard.sock"
+
+
+def agent_chat_socket_name(agent_id):
+    validate_agent_id(agent_id)
+    return f"agent-{agent_id}-chat.sock"
 
 
 def agent_dashboard_socket_path(agent_id, socket_dir=AUTHPROXY_SOCKET_MOUNT_DIR):
     return str(Path(socket_dir) / agent_dashboard_socket_name(agent_id))
 
+
+def agent_chat_socket_path(agent_id, socket_dir=AUTHPROXY_SOCKET_MOUNT_DIR):
+    return str(Path(socket_dir) / agent_chat_socket_name(agent_id))
 
 def read_agents_from_state():
     def validate_agent_metadata(agent_data, index):

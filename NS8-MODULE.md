@@ -9,8 +9,8 @@ This document summarizes the current checked-in NS8 behavior for `ns8-hermes-age
 - No OpenViking runtime
 - No hidden system agent
 - No shared backend API service
-- No standalone dashboard sidecar runtime; the per-agent Hermes container runs dashboard and gateway together
-- One configured agent equals one primary `hermes@<id>.service`, one per-agent pod owner unit, one pod, and one Hermes container, plus the shared auth service and container when publishing is active
+- No standalone dashboard sidecar runtime; Hermes and Open WebUI run inside the same per-agent pod
+- One configured agent equals one primary `hermes@<id>.service`, one `openwebui@<id>.service`, one per-agent pod owner unit, one pod, one Hermes container, one Open WebUI container, two socket relay sidecars, plus the shared auth service and container when publishing is active
 
 The implementation keeps the module lifecycle explicit:
 
@@ -26,10 +26,16 @@ The module publishes:
 
 - `ghcr.io/nethserver/hermes-agent`: the NS8 module image
 - `ghcr.io/nethserver/hermes-agent-auth`: the shared dashboard auth proxy image
+<<<<<<< HEAD
 - `ghcr.io/nethserver/hermes-agent-hermes`: the Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.23`
 - `ghcr.io/nethserver/hermes-agent-socket`: the per-agent dashboard socket relay image
+=======
+- `ghcr.io/nethserver/hermes-agent-hermes`: the Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.16`
+- `ghcr.io/nethserver/hermes-agent-openwebui`: the per-agent Open WebUI sidecar image
+- `ghcr.io/nethserver/hermes-agent-socket`: the per-agent dashboard/chat socket relay image
+>>>>>>> 854d492 (feat: add open webui sidecar routing (#2))
 
-`build-images.sh` builds all four images.
+`build-images.sh` builds all five images.
 
 The module image reserves one TCP port and declares `cluster:accountconsumer traefik@node:routeadm node:portsadm` authorizations so it can bind one NS8 user domain and publish one shared auth route.
 
@@ -137,7 +143,7 @@ Shared SMTP values come from `discover-smarthost`:
 - public SMTP keys are merged into `environment`
 - `SMTP_PASSWORD` is written into `secrets.env`
 
-`sync-agent-runtime` copies the relevant shared SMTP values into each generated Hermes env file and per-agent secrets file, generates the shared auth runtime files, and ensures `HERMES_AUTH_SESSION_SECRET` exists in `secrets.env`.
+`sync-agent-runtime` copies the relevant shared SMTP values into each generated Hermes env file and per-agent secrets file, generates the shared auth runtime files, ensures `HERMES_AUTH_SESSION_SECRET` exists in `secrets.env`, and ensures each agent has a persistent `API_SERVER_KEY` for the local Hermes OpenAI-compatible API server.
 When `USER_DOMAIN` is configured, `sync-agent-runtime` also writes these public env keys into each generated `agent_<id>.env` file:
 
 - `AGENT_ALLOWED_USER`
@@ -149,6 +155,7 @@ When `USER_DOMAIN` is configured, `sync-agent-runtime` also writes these public 
 
 and these LDAP bind values into each generated `agent_<id>_secrets.env` file:
 
+- `API_SERVER_KEY`
 - `LDAP_BIND_DN`
 - `LDAP_BIND_PASSWORD`
 
@@ -157,27 +164,35 @@ and these LDAP bind values into each generated `agent_<id>_secrets.env` file:
 The shipped units are:
 
 - `imageroot/systemd/user/hermes@.service`
+- `imageroot/systemd/user/openwebui@.service`
 - `imageroot/systemd/user/hermes-socket@.service`
+- `imageroot/systemd/user/openwebui-socket@.service`
 - `imageroot/systemd/user/hermes-auth.service`
 - `imageroot/systemd/user/hermes-pod@.service`
 
 For agent `1`, the runtime looks like:
 
-- primary systemd service: `hermes@1.service`
-- per-agent socket relay service: `hermes-socket@1.service`
+- primary Hermes systemd service: `hermes@1.service`
+- primary Open WebUI systemd service: `openwebui@1.service`
+- dashboard socket relay service: `hermes-socket@1.service`
+- chat socket relay service: `openwebui-socket@1.service`
 - Podman pod: `hermes-pod-1`
 - Hermes container: `hermes-1`
+- Open WebUI container: `openwebui-1`
 - dashboard socket relay container: `hermes-socket-1`
+- chat socket relay container: `openwebui-socket-1`
 - Hermes home named volume: `hermes-agent-1-home` mounted at `/opt/data`
 - shared auth listener: `127.0.0.1:${TCP_PORT}` forwarded to auth proxy port `9119`
-- dashboard socket: `%S/state/dashboard-sockets/agent-1.sock`, mounted into the auth container as `/sockets/agent-1.sock`
+- dashboard socket: `%S/state/dashboard-sockets/agent-1-dashboard.sock`, mounted into the auth container as `/sockets/agent-1-dashboard.sock`
+- chat socket: `%S/state/dashboard-sockets/agent-1-chat.sock`, mounted into the auth container as `/sockets/agent-1-chat.sock`
 - shared auth proxy service: `hermes-auth.service`
 - Hermes auth proxy container: `hermes-auth`
 
-Restart supervision is owned by `hermes@<id>.service` and `hermes-auth.service`; `hermes@<id>.service` keeps `Restart=always` so in-agent `/restart` messages can restart the gateway, while sidecar/auth services use failure-oriented restart policies. The Podman pod and container launches do not set container-level restart policies.
+<<<<<<< HEAD
+Restart supervision is owned by `hermes@<id>.service`,`openwebui@<id>.service` and `hermes-auth.service`; `hermes@<id>.service` keeps `Restart=always` so in-agent `/restart` messages can restart the gateway, while sidecar/auth services use failure-oriented restart policies. The Podman pod and container launches do not set container-level restart policies.
 The services invoke Podman and the runtime creates one Podman-managed volume per agent. During module updates, `update-module.d/30ensure-agent-home-ownership` best-effort stops any active `hermes@<id>.service` and `hermes-socket@<id>.service` pair, resets failed state, and runs `ensure-agent-home-ownership` before `update-module.d/80restart` restarts the enabled `hermes@<id>.service`, `hermes-socket@<id>.service`, and `hermes-auth.service` units so the refreshed images are actually used.
 Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes@<id>.service` starts. Later configure runs preserve existing files inside the volume.
-The Hermes container runs `hermes dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run` inside the pod. `hermes-socket@.service` joins the same pod, relays `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>.sock`, and the shared auth service mounts `%S/state/dashboard-sockets:/sockets:z`. The shared auth service listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, and logs auth attempts plus outcomes to stdout while proxying to each agent's `upstream_socket`.
+The Hermes container runs the gateway and exposes its local OpenAI-compatible API server on `127.0.0.1:8642` inside the pod. `hermes-socket@.service` joins the same pod, relays the Hermes dashboard on `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>-dashboard.sock`, and `openwebui-socket@.service` relays Open WebUI on `127.0.0.1:8080` onto `%S/state/dashboard-sockets/agent-<id>-chat.sock`. The shared auth service mounts `%S/state/dashboard-sockets:/sockets:z`, listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, and proxies `/hermes-<id>/dashboard` and `/hermes-<id>/chat` to the matching per-agent socket.
 The Hermes wrapper no longer patches or rebuilds the upstream dashboard sources at container start.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/` to the shared auth listener on `TCP_PORT` using the route instance `<module>-hermes-auth`.
 
@@ -208,14 +223,14 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 - `20persist-shared-env`: persists `base_virtualhost`, optional shared `user_domain`, plus `lets_encrypt`, tracks previous values for route cleanup, and backfills `TIMEZONE` when missing
 - `25configure-user-domain`: binds or unbinds the module relation to the selected NS8 user domain
 - `30remove-deleted-routes`: reserved lifecycle slot; removed-agent route cleanup is no longer needed because the module manages only the shared Traefik route
-- `40remove-deleted-agents`: stops removed services, removes removed pods and containers including `hermes-socket-<id>`, and delegates generated-state cleanup to `remove-agent-state`
+- `40remove-deleted-agents`: stops removed services, removes removed pods and containers including `hermes-socket-<id>` and `openwebui-socket-<id>`, and delegates generated-state cleanup to `remove-agent-state`
 - `50write-agent-metadata`: writes one `metadata.json` file per desired agent, including persisted `allowed_user`
 - `60refresh-shared-settings`: runs `discover-smarthost`
-- `70sync-agent-runtime`: runs `sync-agent-runtime`, which now also fans out `AGENT_ALLOWED_USER` plus LDAP runtime env and secrets when `USER_DOMAIN` is set and writes `authproxy_agents.json` `upstream_socket` entries
+- `70sync-agent-runtime`: runs `sync-agent-runtime`, which now also fans out `AGENT_ALLOWED_USER` plus LDAP runtime env and secrets when `USER_DOMAIN` is set, generates one persistent `API_SERVER_KEY` per agent, and writes `authproxy_agents.json` dashboard/chat socket entries
 - `75seed-agent-home`: runs a one-shot Hermes container to seed first-time `/opt/data/SOUL.md` and `/opt/data/.env` content from checked-in templates
 - `80reload-systemd`: reloads the user systemd manager
 - `90reconcile-desired-routes`: creates, updates, or clears the shared Traefik route instance `<module>-hermes-auth` when `base_virtualhost` is configured or explicitly changed, including `lets_encrypt` cleanup for host changes or shared TLS disable events
-- `95reconcile-agent-services`: enables and starts both `hermes@<id>.service` and `hermes-socket@<id>.service` for desired `start` agents, disables or stops the rest, and manages the shared `hermes-auth.service` when publishing is active
+- `95reconcile-agent-services`: enables and starts `hermes@<id>.service`, `openwebui@<id>.service`, and both socket relay units for desired `start` agents, disables or stops the rest, and manages the shared `hermes-auth.service` when publishing is active
 
 ### `list-user-domains`
 

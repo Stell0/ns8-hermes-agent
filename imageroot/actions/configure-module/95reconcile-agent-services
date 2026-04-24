@@ -25,10 +25,14 @@ def run(command, check=True):
 def stop_disable_agent(agent_id):
     # Reset the whole runtime footprint for stopped agents so systemd can
     # recreate the declared one-agent/one-pod layout on the next start.
+    run(["systemctl", "--user", "disable", "--now", f"openwebui-socket@{agent_id}.service"], check=False)
+    run(["systemctl", "--user", "disable", "--now", f"openwebui@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "disable", "--now", f"hermes-socket@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "disable", "--now", f"hermes@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "stop", f"hermes-pod@{agent_id}.service"], check=False)
     run(["podman", "pod", "rm", "--force", f"hermes-pod-{agent_id}"], check=False)
+    run(["podman", "rm", "--force", f"openwebui-{agent_id}"], check=False)
+    run(["podman", "rm", "--force", f"openwebui-socket-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-socket-{agent_id}"], check=False)
 
@@ -41,12 +45,18 @@ for agent_data in desired_agents:
         # Stop first so the unit rebuilds the pod and containers from the fresh
         # generated env files instead of reusing stale runtime state.
         run(["systemctl", "--user", "enable", f"hermes@{agent_id}.service"])
+        run(["systemctl", "--user", "enable", f"openwebui@{agent_id}.service"])
         run(["systemctl", "--user", "enable", f"hermes-socket@{agent_id}.service"])
+        run(["systemctl", "--user", "enable", f"openwebui-socket@{agent_id}.service"])
+        run(["systemctl", "--user", "stop", f"openwebui-socket@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "stop", f"hermes-socket@{agent_id}.service"], check=False)
+        run(["systemctl", "--user", "stop", f"openwebui@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "stop", f"hermes@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "stop", f"hermes-pod@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "start", f"hermes@{agent_id}.service"])
+        run(["systemctl", "--user", "start", f"openwebui@{agent_id}.service"])
         run(["systemctl", "--user", "start", f"hermes-socket@{agent_id}.service"])
+        run(["systemctl", "--user", "start", f"openwebui-socket@{agent_id}.service"])
         continue
 
     stop_disable_agent(agent_id)
