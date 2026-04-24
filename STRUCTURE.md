@@ -82,7 +82,7 @@ This document maps the current layout.
 
 - `containers/auth/Containerfile`: shared dashboard auth proxy image.
 - `containers/auth/authproxy.py`: FastAPI auth proxy that authenticates the shared virtualhost against LDAP, issues a host-wide session cookie, preserves the dashboard upstream `Authorization` header, replaces any inbound `X-Hermes-Authenticated-User` value with a trusted value derived from the authenticated session username, logs auth attempts and outcomes to stdout, and proxies authenticated sessions to the assigned dashboard upstream from `authproxy_agents.json`, including `upstream_socket` records.
-- `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.16` without a dashboard source patch helper.
+- `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.23` without a dashboard source patch helper.
 - `containers/hermes/entrypoint.sh`: wrapper entrypoint that bootstraps the Hermes home volume, exports the bundled `web_dist` when present, and can run the Hermes dashboard and gateway together inside one container.
 - `containers/socket/Containerfile`: minimal Alpine-based socket relay image that runs `socat` for the per-agent dashboard sidecar.
 

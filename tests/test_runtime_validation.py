@@ -1047,7 +1047,7 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.4.16", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.4.23", containerfile)
         self.assertNotIn("FROM docker.io/node:24.11.1-slim AS dashboard-builder", containerfile)
         self.assertNotIn("COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py", containerfile)
         self.assertNotIn("ns8-web-dist", containerfile)
