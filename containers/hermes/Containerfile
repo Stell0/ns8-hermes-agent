@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gh \
     git \
+    less \
     pip \
     python3-googleapi \
-    python3-google-auth-oauthlib
+    python3-google-auth-oauthlib \
+    vim
 
 RUN pip install --no-cache-dir --break-system-packages \
     ddgs \
