@@ -782,6 +782,7 @@ class HermesAuthProxyTest(unittest.TestCase):
             headers={
                 "Authorization": "Bearer dashboard-token",
                 authproxy.AUTHENTICATED_USER_HEADER: "spoofed-user",
+                "host": "agents.example.org",
                 "x-forwarded-proto": "https",
             },
             cookies={
@@ -805,6 +806,7 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertEqual(len(upstream_client.calls), 1)
         upstream_headers = upstream_client.calls[0]["kwargs"]["headers"]
         self.assertEqual(upstream_headers["Authorization"], "Bearer dashboard-token")
+        self.assertEqual(upstream_headers["Host"], "127.0.0.1:9120")
         self.assertEqual(upstream_headers[authproxy.AUTHENTICATED_USER_HEADER], "alice")
         self.assertEqual(upstream_headers["Cookie"], "dashboard_cookie=session-cookie")
 

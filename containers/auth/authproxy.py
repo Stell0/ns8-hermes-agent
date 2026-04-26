@@ -609,6 +609,7 @@ def upstream_headers(request, authenticated_username=""):
     if authenticated_username:
         forwarded_headers[AUTHENTICATED_USER_HEADER] = authenticated_username
 
+    forwarded_headers["Host"] = "127.0.0.1:9120"
     forwarded_headers["X-Forwarded-Proto"] = request.headers.get("x-forwarded-proto", "http")
     forwarded_headers["X-Forwarded-Host"] = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
     forwarded_headers["X-Forwarded-For"] = client_host(request)
