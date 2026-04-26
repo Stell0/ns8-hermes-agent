@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import subprocess
+import sys
+
+
+OWNERSHIP_SCRIPT = r'''
+uid="$(id -u hermes)"
+gid="$(id -g hermes)"
+desired_owner="${uid}:${gid}"
+marker="/opt/data/.ns8-hermes-agent-owner"
+current_owner=""
+
+if [ -f "$marker" ]; then
+  current_owner="$(cat "$marker" || true)"
+fi
+
+top_owner="$(stat -c '%u:%g' /opt/data)"
+
+if [ "$current_owner" != "$desired_owner" ] || [ "$top_owner" != "$desired_owner" ]; then
+  chown -R "$uid:$gid" /opt/data
+  printf '%s\n' "$desired_owner" > "$marker"
+  chown "$uid:$gid" "$marker"
+fi
+'''
+
+
+def ensure_agent_home_ownership(agent_id):
+    image = os.environ.get("HERMES_AGENT_HERMES_IMAGE")
+    if not image:
+        raise ValueError("HERMES_AGENT_HERMES_IMAGE is not set")
+
+    command = [
+        "podman",
+        "run",
+        "--rm",
+        "--replace",
+        "--name",
+        f"hermes-agent-chown-{agent_id}",
+        "--network=none",
+        "--user",
+        "root",
+        "--entrypoint",
+        "/bin/sh",
+        "--volume",
+        f"hermes-agent-{agent_id}-home:/opt/data:z",
+        image,
+        "-eu",
+        "-c",
+        OWNERSHIP_SCRIPT,
+    ]
+    subprocess.run(command, check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Ensure an agent Hermes home volume is owned by the image hermes user")
+    parser.add_argument("--agent-id", type=int, required=True)
+    args = parser.parse_args()
+
+    try:
+        ensure_agent_home_ownership(args.agent_id)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

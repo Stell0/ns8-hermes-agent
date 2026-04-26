@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
 REMOVE_AGENT_STATE_PATH = ROOT / "imageroot" / "bin" / "remove-agent-state"
+ENSURE_AGENT_HOME_OWNERSHIP_PATH = ROOT / "imageroot" / "bin" / "ensure-agent-home-ownership"
 SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes@.service"
 AUTH_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-auth.service"
 POD_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes-pod@.service"
@@ -32,8 +33,10 @@ BUILD_IMAGES_PATH = ROOT / "build-images.sh"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
+UPDATE_MODULE_SCRIPT_DIR = ROOT / "imageroot" / "update-module.d"
 PERSIST_SHARED_ENV_PATH = CONFIGURE_MODULE_ACTION_DIR / "20persist-shared-env"
 SEED_AGENT_HOME_ACTION_PATH = CONFIGURE_MODULE_ACTION_DIR / "75seed-agent-home"
+UPDATE_OWNERSHIP_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "30ensure-agent-home-ownership"
 RECONCILE_DESIRED_ROUTES_PATH = CONFIGURE_MODULE_ACTION_DIR / "90reconcile-desired-routes"
 DESTROY_REMOVE_ROUTES_PATH = DESTROY_MODULE_ACTION_DIR / "10remove-routes"
 GET_CONFIGURATION_PATH = ROOT / "imageroot" / "actions" / "get-configuration" / "20read"
@@ -1009,6 +1012,7 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("--volume hermes-agent-%i-home:/opt/data", service_template)
         self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agent_%i.env", service_template)
+        self.assertIn("ensure-agent-home-ownership --agent-id %i", service_template)
         self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
         self.assertIn("API_SERVER_ENABLED=true", service_template)
         self.assertIn("dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run", service_template)
@@ -1454,6 +1458,71 @@ class HermesModuleStateTest(unittest.TestCase):
 
             self.assertEqual((data_dir / "SOUL.md").read_text(encoding="utf-8"), "customized soul\n")
             self.assertEqual((data_dir / ".env").read_text(encoding="utf-8"), "CUSTOM=true\n")
+
+
+    def test_ensure_agent_home_ownership_uses_image_hermes_uid(self):
+        with mock.patch.dict(
+            os.environ,
+            {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
+            clear=False,
+        ), mock.patch("sys.argv", [str(ENSURE_AGENT_HOME_OWNERSHIP_PATH), "--agent-id", "2"]), mock.patch(
+            "subprocess.run"
+        ) as run_mock, self.assertRaises(SystemExit) as exit_context:
+            runpy.run_path(str(ENSURE_AGENT_HOME_OWNERSHIP_PATH), run_name="__main__")
+
+        self.assertEqual(exit_context.exception.code, 0)
+        command = run_mock.call_args.args[0]
+        self.assertIn("podman", command)
+        self.assertIn("run", command)
+        self.assertIn("--user", command)
+        self.assertEqual(command[command.index("--user") + 1], "root")
+        self.assertIn("--entrypoint", command)
+        self.assertEqual(command[command.index("--entrypoint") + 1], "/bin/sh")
+        self.assertIn("hermes-agent-2-home:/opt/data:z", command)
+        self.assertIn("quay.io/example/hermes:test", command)
+        ownership_script = command[-1]
+        self.assertIn("id -u hermes", ownership_script)
+        self.assertIn("id -g hermes", ownership_script)
+        self.assertIn("chown -R", ownership_script)
+        self.assertNotIn("10000", ownership_script)
+
+    def test_update_module_script_repairs_known_agent_home_ownership_before_restart(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.state.write_jsonfile(
+                Path("agents") / "1" / "metadata.json",
+                {"id": 1, "name": "One", "role": "developer", "status": "start"},
+            )
+            write_envfile("agent_3.env", {"AGENT_ID": "3"})
+
+            with mock.patch("subprocess.run", side_effect=lambda *args, **kwargs: types.SimpleNamespace(returncode=0)) as run_mock:
+                runpy.run_path(str(UPDATE_OWNERSHIP_SCRIPT_PATH), run_name="__main__")
+
+            logged_commands = [call.args[0] for call in run_mock.call_args_list]
+            self.assertEqual(
+                logged_commands,
+                [
+                    ["systemctl", "--user", "is-active", "--quiet", "hermes@1.service"],
+                    ["systemctl", "--user", "stop", "hermes-socket@1.service"],
+                    ["systemctl", "--user", "stop", "hermes@1.service"],
+                    ["runagent", "ensure-agent-home-ownership", "--agent-id", "1"],
+                    ["systemctl", "--user", "start", "hermes@1.service"],
+                    ["systemctl", "--user", "start", "hermes-socket@1.service"],
+                    ["systemctl", "--user", "is-active", "--quiet", "hermes@3.service"],
+                    ["systemctl", "--user", "stop", "hermes-socket@3.service"],
+                    ["systemctl", "--user", "stop", "hermes@3.service"],
+                    ["runagent", "ensure-agent-home-ownership", "--agent-id", "3"],
+                    ["systemctl", "--user", "start", "hermes@3.service"],
+                    ["systemctl", "--user", "start", "hermes-socket@3.service"],
+                ],
+            )
+            ensure_indexes = [
+                index
+                for index, call in enumerate(run_mock.call_args_list)
+                if call.args[0][:2] == ["runagent", "ensure-agent-home-ownership"]
+            ]
+            self.assertEqual(ensure_indexes, [3, 9])
+            for index, call in enumerate(run_mock.call_args_list):
+                self.assertEqual(call.kwargs.get("check"), index in ensure_indexes)
 
     def test_seed_agent_home_action_requires_generated_public_envfile(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):

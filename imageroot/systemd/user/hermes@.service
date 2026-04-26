@@ -8,12 +8,13 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 EnvironmentFile=-%S/state/environment
 EnvironmentFile=-%S/state/agent_%i.env
 WorkingDirectory=%S/state
-Restart=always
+Restart=on-failure
 KillMode=none
 Type=notify
 NotifyAccess=all
 ExecStartPre=/usr/local/bin/runagent discover-smarthost
 ExecStartPre=/usr/local/bin/runagent sync-agent-runtime --agent-id %i
+ExecStartPre=/usr/local/bin/runagent ensure-agent-home-ownership --agent-id %i
 ExecStartPre=-/usr/bin/podman rm --force hermes-%i
 ExecStart=runagent /usr/bin/podman run \
 		--name hermes-%i \

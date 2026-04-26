@@ -54,8 +54,13 @@ This document maps the current layout.
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets.env`.
+- `ensure-agent-home-ownership`: runs a one-shot root helper container from the configured Hermes image and recursively assigns an agent home volume to that image's dynamic `hermes` UID/GID when needed.
 - `remove-agent-state`: removes generated per-agent env files, dashboard socket files, agent state directories, and the per-agent Hermes home volume.
 - `sync-agent-runtime`: writes `agent_<id>.env` and `agent_<id>_secrets.env` for each configured agent, including the live auth proxy LDAP env and bind secrets when `USER_DOMAIN` is set, and generates `authproxy_agents.json` `upstream_socket` records.
+
+### `imageroot/update-module.d/`
+
+- `30ensure-agent-home-ownership`: NS8 update hook that repairs every known agent home volume before restarting any agent service that was active at update time.
 
 ### `imageroot/events/`
 
