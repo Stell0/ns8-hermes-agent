@@ -8,7 +8,7 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 EnvironmentFile=-%S/state/environment
 EnvironmentFile=-%S/state/agent_%i.env
 WorkingDirectory=%S/state
-Restart=on-failure
+Restart=always
 KillMode=none
 Type=notify
 NotifyAccess=all

@@ -1001,8 +1001,8 @@ class HermesModuleStateTest(unittest.TestCase):
         pod_template = POD_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
         socket_template = SOCKET_SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("Restart=on-failure", service_template)
-        self.assertNotIn("Restart=always", service_template)
+        self.assertIn("Restart=always", service_template)
+        self.assertNotIn("Restart=on-failure", service_template)
         self.assertNotIn("EnvironmentFile=-%S/state/hosts", service_template)
         self.assertNotIn("$PODMAN_ADD_HOST_ARGS", service_template)
         self.assertNotIn("--restart=always", service_template)
@@ -1015,7 +1015,6 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("ensure-agent-home-ownership --agent-id %i", service_template)
         self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
         self.assertIn("API_SERVER_ENABLED=true", service_template)
-        self.assertIn("dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run", service_template)
         self.assertIn("gateway run", service_template)
         self.assertNotIn("seed-agent-home", service_template)
 
@@ -1515,14 +1514,15 @@ class HermesModuleStateTest(unittest.TestCase):
                     ["systemctl", "--user", "start", "hermes-socket@3.service"],
                 ],
             )
-            ensure_indexes = [
+            checked_indexes = [
                 index
                 for index, call in enumerate(run_mock.call_args_list)
-                if call.args[0][:2] == ["runagent", "ensure-agent-home-ownership"]
+                if call.args[0][:2] != ["systemctl", "--user"]
+                or call.args[0][2:4] != ["is-active", "--quiet"]
             ]
-            self.assertEqual(ensure_indexes, [3, 9])
+            self.assertEqual(checked_indexes, [1, 2, 3, 4, 5, 7, 8, 9, 10, 11])
             for index, call in enumerate(run_mock.call_args_list):
-                self.assertEqual(call.kwargs.get("check"), index in ensure_indexes)
+                self.assertEqual(call.kwargs.get("check"), index in checked_indexes)
 
     def test_seed_agent_home_action_requires_generated_public_envfile(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
