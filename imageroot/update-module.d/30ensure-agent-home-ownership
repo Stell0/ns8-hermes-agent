@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
+
+from hermes_agent_state import list_known_agent_ids
+
+
+def run(command, check=False):
+    return subprocess.run(command, check=check)
+
+
+for agent_id in list_known_agent_ids():
+    service_name = f"hermes@{agent_id}.service"
+    socket_service_name = f"hermes-socket@{agent_id}.service"
+    was_active = run(["systemctl", "--user", "is-active", "--quiet", service_name]).returncode == 0
+
+    if was_active:
+        run(["systemctl", "--user", "stop", socket_service_name], check=True)
+        run(["systemctl", "--user", "stop", service_name], check=True)
+
+    run(["runagent", "ensure-agent-home-ownership", "--agent-id", str(agent_id)], check=True)
+
+    if was_active:
+        run(["systemctl", "--user", "start", service_name], check=True)
+        run(["systemctl", "--user", "start", socket_service_name], check=True)

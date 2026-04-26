@@ -122,6 +122,7 @@ Per-agent Podman volume:
 
 - `hermes-agent-<id>-home`, mounted at `/opt/data`
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md`, `.env`, and `config.yaml`, plus the runtime directory skeleton used by Hermes
+- ownership is repaired by a one-shot root helper from the configured Hermes image so `/opt/data` matches that image's dynamic `hermes` UID/GID rather than a hardcoded UID
 
 The active managed Traefik route instance is `<module_id>-hermes-auth`. Hermes home volume names are `hermes-agent-<id>-home`.
 
@@ -173,8 +174,8 @@ For agent `1`, the runtime looks like:
 - shared auth proxy service: `hermes-auth.service`
 - Hermes auth proxy container: `hermes-auth`
 
-Restart supervision is owned by `hermes@<id>.service` and `hermes-auth.service` with `Restart=on-failure`; the Podman pod and container launches do not set container-level restart policies.
-The services invoke Podman and the runtime creates one Podman-managed volume per agent.
+Restart supervision is owned by `hermes@<id>.service` and `hermes-auth.service`; `hermes@<id>.service` keeps `Restart=always` so in-agent `/restart` messages can restart the gateway, while sidecar/auth services use failure-oriented restart policies. The Podman pod and container launches do not set container-level restart policies.
+The services invoke Podman and the runtime creates one Podman-managed volume per agent. Before each Hermes start, `hermes@<id>.service` runs `ensure-agent-home-ownership`, which uses the configured Hermes image to discover the current `hermes` UID/GID and repair `/opt/data` ownership without hardcoding numeric IDs.
 Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes@<id>.service` starts. Later configure runs preserve existing files inside the volume.
 The Hermes container runs `hermes dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run` inside the pod. `hermes-socket@.service` joins the same pod, relays `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>.sock`, and the shared auth service mounts `%S/state/dashboard-sockets:/sockets:z`. The shared auth service listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, and logs auth attempts plus outcomes to stdout while proxying to each agent's `upstream_socket`.
 The Hermes wrapper no longer patches or rebuilds the upstream dashboard sources at container start.
