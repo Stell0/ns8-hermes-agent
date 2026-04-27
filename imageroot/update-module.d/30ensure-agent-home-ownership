@@ -22,7 +22,7 @@ for agent_id in list_known_agent_ids():
         run(["systemctl", "--user", "stop", socket_service_name], check=True)
         run(["systemctl", "--user", "stop", service_name], check=True)
 
-    run(["runagent", "ensure-agent-home-ownership", "--agent-id", str(agent_id)], check=True)
+    run(["runagent", "ensure-agent-home-ownership", "--agent-id", str(agent_id), "--run-hermes-update"], check=True)
 
     if was_active:
         run(["systemctl", "--user", "start", service_name], check=True)

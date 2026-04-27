@@ -122,7 +122,7 @@ Per-agent Podman volume:
 
 - `hermes-agent-<id>-home`, mounted at `/opt/data`
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md`, `.env`, and `config.yaml`, plus the runtime directory skeleton used by Hermes
-- ownership is repaired by a one-shot root helper from the configured Hermes image so `/opt/data` matches that image's dynamic `hermes` UID/GID rather than a hardcoded UID
+- ownership is repaired by a one-shot root helper from the configured Hermes image so `/opt/data` matches that image's dynamic `hermes` UID/GID rather than a hardcoded UID; during package updates the same helper also runs `hermes update` as the image `hermes` user after ownership is fixed
 
 The active managed Traefik route instance is `<module_id>-hermes-auth`. Hermes home volume names are `hermes-agent-<id>-home`.
 
@@ -175,7 +175,7 @@ For agent `1`, the runtime looks like:
 - Hermes auth proxy container: `hermes-auth`
 
 Restart supervision is owned by `hermes@<id>.service` and `hermes-auth.service`; `hermes@<id>.service` keeps `Restart=always` so in-agent `/restart` messages can restart the gateway, while sidecar/auth services use failure-oriented restart policies. The Podman pod and container launches do not set container-level restart policies.
-The services invoke Podman and the runtime creates one Podman-managed volume per agent. During module updates, `update-module.d/30ensure-agent-home-ownership` runs `ensure-agent-home-ownership`, which uses the configured Hermes image to discover the current `hermes` UID/GID and repair `/opt/data` ownership without hardcoding numeric IDs.
+The services invoke Podman and the runtime creates one Podman-managed volume per agent. During module updates, `update-module.d/30ensure-agent-home-ownership` runs `ensure-agent-home-ownership`, which uses the configured Hermes image to discover the current `hermes` UID/GID and repair `/opt/data` ownership without hardcoding numeric IDs. The update hook passes `--run-hermes-update` so `hermes update` runs only during module updates, after ownership is fixed, and as the image `hermes` user.
 Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes@<id>.service` starts. Later configure runs preserve existing files inside the volume.
 The Hermes container runs `hermes dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run` inside the pod. `hermes-socket@.service` joins the same pod, relays `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>.sock`, and the shared auth service mounts `%S/state/dashboard-sockets:/sockets:z`. The shared auth service listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, and logs auth attempts plus outcomes to stdout while proxying to each agent's `upstream_socket`.
 The Hermes wrapper no longer patches or rebuilds the upstream dashboard sources at container start.
