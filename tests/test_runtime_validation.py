@@ -1484,6 +1484,24 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("id -g hermes", ownership_script)
         self.assertIn("chown -R", ownership_script)
         self.assertNotIn("10000", ownership_script)
+        self.assertNotIn("hermes update", ownership_script)
+
+    def test_ensure_agent_home_ownership_can_run_hermes_update_as_hermes(self):
+        with mock.patch.dict(
+            os.environ,
+            {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
+            clear=False,
+        ), mock.patch(
+            "sys.argv",
+            [str(ENSURE_AGENT_HOME_OWNERSHIP_PATH), "--agent-id", "2", "--run-hermes-update"],
+        ), mock.patch("subprocess.run") as run_mock, self.assertRaises(SystemExit) as exit_context:
+            runpy.run_path(str(ENSURE_AGENT_HOME_OWNERSHIP_PATH), run_name="__main__")
+
+        self.assertEqual(exit_context.exception.code, 0)
+        command = run_mock.call_args.args[0]
+        ownership_script = command[-1]
+        self.assertIn("su hermes -c 'cd /opt/data && hermes update'", ownership_script)
+        self.assertIn("chown -R", ownership_script)
 
     def test_update_module_script_repairs_known_agent_home_ownership_before_restart(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -1503,13 +1521,13 @@ class HermesModuleStateTest(unittest.TestCase):
                     ["systemctl", "--user", "is-active", "--quiet", "hermes@1.service"],
                     ["systemctl", "--user", "stop", "hermes-socket@1.service"],
                     ["systemctl", "--user", "stop", "hermes@1.service"],
-                    ["runagent", "ensure-agent-home-ownership", "--agent-id", "1"],
+                    ["runagent", "ensure-agent-home-ownership", "--agent-id", "1", "--run-hermes-update"],
                     ["systemctl", "--user", "start", "hermes@1.service"],
                     ["systemctl", "--user", "start", "hermes-socket@1.service"],
                     ["systemctl", "--user", "is-active", "--quiet", "hermes@3.service"],
                     ["systemctl", "--user", "stop", "hermes-socket@3.service"],
                     ["systemctl", "--user", "stop", "hermes@3.service"],
-                    ["runagent", "ensure-agent-home-ownership", "--agent-id", "3"],
+                    ["runagent", "ensure-agent-home-ownership", "--agent-id", "3", "--run-hermes-update"],
                     ["systemctl", "--user", "start", "hermes@3.service"],
                     ["systemctl", "--user", "start", "hermes-socket@3.service"],
                 ],

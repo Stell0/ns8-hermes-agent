@@ -26,11 +26,19 @@ if [ "$current_owner" != "$desired_owner" ] || [ "$top_owner" != "$desired_owner
 fi
 '''
 
+HERMES_UPDATE_SCRIPT = r'''
+su hermes -c 'cd /opt/data && hermes update'
+'''
 
-def ensure_agent_home_ownership(agent_id):
+
+def ensure_agent_home_ownership(agent_id, run_hermes_update=False):
     image = os.environ.get("HERMES_AGENT_HERMES_IMAGE")
     if not image:
         raise ValueError("HERMES_AGENT_HERMES_IMAGE is not set")
+
+    command_script = OWNERSHIP_SCRIPT
+    if run_hermes_update:
+        command_script = f"{OWNERSHIP_SCRIPT}\n{HERMES_UPDATE_SCRIPT}"
 
     command = [
         "podman",
@@ -49,7 +57,7 @@ def ensure_agent_home_ownership(agent_id):
         image,
         "-eu",
         "-c",
-        OWNERSHIP_SCRIPT,
+        command_script,
     ]
     subprocess.run(command, check=True)
 
@@ -57,10 +65,15 @@ def ensure_agent_home_ownership(agent_id):
 def main():
     parser = argparse.ArgumentParser(description="Ensure an agent Hermes home volume is owned by the image hermes user")
     parser.add_argument("--agent-id", type=int, required=True)
+    parser.add_argument(
+        "--run-hermes-update",
+        action="store_true",
+        help="Run 'hermes update' as the image hermes user after repairing ownership",
+    )
     args = parser.parse_args()
 
     try:
-        ensure_agent_home_ownership(args.agent_id)
+        ensure_agent_home_ownership(args.agent_id, run_hermes_update=args.run_hermes_update)
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
