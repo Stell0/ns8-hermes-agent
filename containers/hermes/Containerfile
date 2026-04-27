@@ -30,6 +30,7 @@ COPY entrypoint.sh /entrypoint.sh
 USER root
 
 RUN cd /opt/hermes/web && npm install && npm run build
+RUN cd && npm install -g @qwen-code/qwen-code@latest
 
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
 RUN chown -R hermes:hermes /opt/hermes /opt/data
