@@ -111,7 +111,7 @@ Per-agent Podman volume:
 
 - `hermes-agent-<id>-home`, mounted at `/opt/data`
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md`, `.env`, and `config.yaml`, plus the runtime directory skeleton used by Hermes
-- ownership is repaired with the Hermes image's own `hermes` UID/GID during updates and before service start, so image UID changes do not leave the volume unwritable
+- ownership is repaired with the Hermes image's own `hermes` UID/GID during module updates, so image UID changes do not leave the volume unwritable
 
 Operator-visible runtime names are `hermes-pod-<id>` for the pod, `hermes-<id>` for the per-agent Hermes container, `hermes-socket-<id>` for the per-agent socket relay container, `hermes-auth` for the shared auth proxy container, `hermes@.service` for the per-agent primary systemd unit, `hermes-socket@.service` for the per-agent socket sidecar unit, and `hermes-auth.service` for the shared auth unit. The active Traefik route instance is `<module_id>-hermes-auth`, and the Hermes home volume name is `hermes-agent-<id>-home`.
 

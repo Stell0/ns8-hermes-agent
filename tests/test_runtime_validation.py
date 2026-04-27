@@ -1012,7 +1012,7 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("--volume hermes-agent-%i-home:/opt/data", service_template)
         self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agent_%i.env", service_template)
-        self.assertIn("ensure-agent-home-ownership --agent-id %i", service_template)
+        self.assertNotIn("ensure-agent-home-ownership --agent-id %i", service_template)
         self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
         self.assertIn("API_SERVER_ENABLED=true", service_template)
         self.assertIn("gateway run", service_template)
